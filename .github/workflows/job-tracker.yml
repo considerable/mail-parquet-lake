@@ -1,0 +1,49 @@
+name: Job Tracker
+on:
+  schedule:
+    - cron: '5 10 * * 1-5'  # Mon-Fri 6:05am ET
+    - cron: '5 14 * * 1-5'  # Mon-Fri 10:05am ET
+    - cron: '5 18 * * 1-5'  # Mon-Fri 2:05pm ET
+    - cron: '5 22 * * 1-5'  # Mon-Fri 6:05pm ET
+    - cron: '5 0 * * 2-6'   # Mon-Fri 8:05pm ET
+    - cron: '5 10 * * 0,6'  # Sat-Sun 6:05am ET
+  workflow_dispatch:       # on-demand via GitHub UI
+
+permissions:
+  id-token: write   # required for OIDC
+  contents: read
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/job-tracker-ci
+          role-session-name: job-tracker
+          aws-region: us-west-2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run job tracker
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_PREFIX: ${{ secrets.S3_PREFIX }}
+          GMAIL_ACCOUNT: ${{ secrets.GMAIL_ACCOUNT }}
+        run: |
+          REPORT=$(python3 agent/job_tracker.py --days 30 --md 2>&1)
+          echo "$REPORT" | aws s3 cp - s3://$S3_BUCKET/$S3_PREFIX/reports/job-tracker-$(date +%Y-%m-%d).md
+          LINES=$(echo "$REPORT" | grep -c '|' || true)
+          echo "## 📋 Job Tracker — $(date +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Report written to S3 ($LINES companies). View with:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "aws s3 cp s3://$S3_BUCKET/$S3_PREFIX/reports/job-tracker-$(date +%Y-%m-%d).md -" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

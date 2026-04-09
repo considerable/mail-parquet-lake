@@ -1,0 +1,56 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.whl
+
+# Credentials / secrets
+.env
+credentials.json
+token.json
+token.pickle
+
+# Export output
+export/output/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Kiro
+.kiro/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+.terraform.lock.hcl
+
+# IDE / editors
+*.swp
+*.swo
+*~
+.idea/
+
+# Parquet / data (keep on S3 only)
+*.parquet
