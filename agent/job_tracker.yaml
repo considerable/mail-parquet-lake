@@ -1,0 +1,99 @@
+# Job tracker configuration
+# Edit this file to tune filtering — no code changes needed.
+
+# Domains to ignore (not job-related). Subdomains are matched too:
+# e.g. "donaldjtrump.com" also ignores "win.donaldjtrump.com"
+ignore_domains:
+  - donaldjtrump.com
+  - winred.com
+  - parkmobile.io
+  - preply.com
+  - modelaircraft.org
+  - schoolspeak.com
+  - substack.com
+  - usps.com
+  - paypal.com
+  - clickpay.com
+  - dcu.org
+  - psegnj.com
+  - engagemsg.com
+  - tesla.com
+  - jcteam.com
+  - onlinesim.io
+  - postman.com
+  - accounts.google.com
+  - digisigner.com
+  - calendar.google.com
+  - google.com
+  - points.com
+  - notification.com
+
+# Keywords that signal job-search activity (matched in subject + body)
+keywords:
+  - interview
+  - recruiter
+  - recruiting
+  - hiring
+  - job opportunity
+  - application
+  - applied
+  - your application
+  - scheduling your interview
+  - phone screen
+  - technical screen
+  - onsite
+  - offer letter
+  - compensation
+  - background check
+  - start date
+  - position
+  - role
+  - candidate
+  - job opening
+  - career
+  - resume
+  - we'd like to invite
+  - next steps
+  - assessment
+  - coding challenge
+  - take-home
+
+# Pipeline stages — order matters (most advanced first).
+# First matching trigger wins for each email.
+stages:
+  - name: offer
+    triggers:
+      - offer letter
+      - compensation package
+      - background check
+      - start date offer
+  - name: interview
+    triggers:
+      - interview
+      - scheduling your interview
+      - onsite
+      - phone screen
+      - technical screen
+      - introductory meeting
+      - virtual interview
+  - name: screen
+    triggers:
+      - assessment
+      - coding challenge
+      - take-home
+  - name: applied
+    triggers:
+      - your application
+      - thank you for applying
+      - thanks for applying
+      - we've received your
+      - application moved
+  - name: outreach
+    triggers:
+      - recruiter
+      - recruiting
+      - job opportunity
+      - we'd like to invite
+      - role
+      - position
+      - candidate

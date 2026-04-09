@@ -1,0 +1,61 @@
+name: Gmail Sync
+on:
+  schedule:
+    - cron: '0 10 * * 1-5'  # Mon-Fri 6am ET (UTC-4)
+    - cron: '0 14 * * 1-5'  # Mon-Fri 10am ET
+    - cron: '0 18 * * 1-5'  # Mon-Fri 2pm ET
+    - cron: '0 22 * * 1-5'  # Mon-Fri 6pm ET
+    - cron: '0 0 * * 2-6'   # Mon-Fri 8pm ET (next UTC day)
+    - cron: '0 10 * * 0,6'  # Sat-Sun 6am ET
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Sync mode'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - incremental
+          - full
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/job-tracker-ci
+          role-session-name: gmail-sync
+          aws-region: us-west-2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Write Gmail credentials
+        run: |
+          echo '${{ secrets.GMAIL_CREDENTIALS_JSON }}' > credentials.json
+          echo '${{ secrets.GMAIL_TOKEN_JSON }}' > token.json
+
+      - name: Run sync
+        env:
+          SYNC_MODE: ${{ github.event.inputs.mode || 'incremental' }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_PREFIX: ${{ secrets.S3_PREFIX }}
+          GMAIL_ACCOUNT: ${{ secrets.GMAIL_ACCOUNT }}
+          GMAIL_CREDENTIALS_FILE: credentials.json
+          GMAIL_TOKEN_FILE: token.json
+        run: |
+          echo "## 📬 Gmail Sync — $(date +%Y-%m-%d) ($SYNC_MODE)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          python3 sync/gmail_sync.py --"$SYNC_MODE" 2>&1
+          echo "✅ Sync complete" >> $GITHUB_STEP_SUMMARY

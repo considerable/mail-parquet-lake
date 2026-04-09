@@ -1,0 +1,132 @@
+name: Security & Code Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  secrets:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sast-semgrep:
+    name: SAST — Semgrep
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v6
+      - run: semgrep scan --config auto --error
+
+  ai-review:
+    name: AI Code Review — Bedrock
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/job-tracker-ci
+          role-session-name: bedrock-review
+          aws-region: us-west-2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install boto3
+      - name: AI review via Bedrock
+        env:
+          AWS_REGION: us-west-2
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git diff origin/main...HEAD -- '*.py' > /tmp/diff.txt
+          if [ ! -s /tmp/diff.txt ]; then echo "No Python changes"; exit 0; fi
+          python3 .github/scripts/ai_review.py /tmp/diff.txt
+
+  ai-review-q:
+    name: AI Code Review — Amazon Q
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/job-tracker-ci
+          role-session-name: q-review
+          aws-region: us-west-2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: corretto
+          java-version: '17'
+      - name: Install CodeGuru CLI
+        run: |
+          curl -OL https://github.com/aws/aws-codeguru-cli/releases/download/0.2.4/aws-codeguru-cli.zip
+          unzip -q aws-codeguru-cli.zip -d codeguru-cli
+      - name: Run CodeGuru review
+        run: |
+          ./codeguru-cli/bin/aws-codeguru-cli \
+            --region us-west-2 \
+            --root-dir . \
+            --src sync/ agent/ export/ \
+            --output /tmp/codeguru-results.json \
+            --no-prompt || true
+          echo "## 🔍 Amazon Q / CodeGuru Review" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/codeguru-results.json >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No findings" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  dependencies:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: |
+          pip install pip-audit pip-licenses
+          pip install -r requirements.txt
+      - name: pip-audit
+        run: pip-audit -r requirements.txt
+      - name: License check
+        run: pip-licenses --order=license --format=markdown
+
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .

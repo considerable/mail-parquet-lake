@@ -1,0 +1,26 @@
+# Gitleaks custom rules — catch PII before it reaches GitHub
+# Extends the default ruleset (secrets, keys, tokens)
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "aws-account-id"
+description = "AWS account ID (12-digit number in ARN context)"
+regex = '''arn:aws:[a-z0-9-]+:[a-z0-9-]*:\d{12}:'''
+tags = ["pii"]
+
+[[rules]]
+id = "gmail-numeric-id"
+description = "Gmail numeric ID pattern"
+regex = '''m\d{10,}@gmail\.com'''
+tags = ["pii"]
+
+  [rules.allowlist]
+  paths = ['''docs/.*\.md$''']
+
+[[rules]]
+id = "s3-bucket-with-prefix"
+description = "Hardcoded S3 path with account-specific prefix"
+regex = '''s3://mail-parquet-lake/[a-z0-9]+-gmail/'''
+tags = ["pii"]

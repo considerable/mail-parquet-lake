@@ -1,0 +1,21 @@
+#!/bin/bash
+# Pre-commit hook — catch PII before it gets committed
+# Install: cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+PATTERNS=(
+    '\bm[0-9]{10,}@gmail\.com\b'
+    '\b[0-9]{12}\b'  # AWS account ID (12 digits)
+)
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$STAGED" ] && exit 0
+
+for pattern in "${PATTERNS[@]}"; do
+    MATCHES=$(echo "$STAGED" | grep -v '\.md$' | xargs grep -lnE "$pattern" 2>/dev/null | grep -v '.gitleaks.toml')
+    if [ -n "$MATCHES" ]; then
+        echo "❌ PII pattern detected: $pattern"
+        echo "$MATCHES"
+        echo "Use placeholders instead. Override with: git commit --no-verify"
+        exit 1
+    fi
+done
