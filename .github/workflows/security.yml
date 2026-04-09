@@ -82,7 +82,7 @@ jobs:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/job-tracker-ci
           role-session-name: q-review
           aws-region: us-west-2
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: corretto
           java-version: '17'
