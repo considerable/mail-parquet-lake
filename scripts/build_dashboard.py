@@ -62,6 +62,22 @@ def public_job(job):
     return result
 
 
+def public_workflow(workflow):
+    keys = ("id", "name", "path", "state", "html_url", "updated_at")
+    return {key: workflow.get(key) for key in keys}
+
+
+def collect_workflows(repository):
+    workflows = []
+    page = 1
+    while True:
+        data = api(f"repos/{repository}/actions/workflows?per_page=100&page={page}")
+        workflows.extend(public_workflow(item) for item in data["workflows"])
+        if len(data["workflows"]) < 100 or len(workflows) >= data["total_count"]:
+            return workflows
+        page += 1
+
+
 def collect(repository, max_pages=5, detail_limit=30):
     runs = []
     total = 0
@@ -86,8 +102,17 @@ def collect(repository, max_pages=5, detail_limit=30):
             run["jobs"] = []
             run["job_details_complete"] = False
             warnings.append(f"Job details unavailable for run {run['id']}")
+    try:
+        workflows = collect_workflows(repository)
+        workflow_states_available = True
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        workflows = []
+        workflow_states_available = False
+        warnings.append("Workflow enablement state unavailable; do not assume active")
     return {
         "schema_version": 1,
+        "workflows": workflows,
+        "workflow_states_available": workflow_states_available,
         "repository": repository,
         "generated_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017 - local Python 3.9 support
         "total_available_runs": total,

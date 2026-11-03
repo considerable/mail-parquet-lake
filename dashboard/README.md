@@ -18,3 +18,13 @@ Run `python scripts/build_dashboard.py` with GitHub CLI authentication or a read
 Enable Pages with **GitHub Actions** as the build source. `.github/workflows/dashboard.yml` builds and deploys the site. Only the deploy job has Pages write and OIDC permissions; it has no AWS permissions. The collector has Actions read access and checks out the trusted main branch, including for `workflow_run` events. It never executes triggering PR code or downloads its artifacts.
 
 Check **Actions → Dashboard** if the page becomes stale. Existing sync/tracker workflows and AWS resources are unchanged.
+
+## Workflow eligibility is a separate status factor
+
+The collector queries the workflow API as well as run history. The page distinguishes enabled, disabled for inactivity, manually disabled, fork-disabled, deleted, and unknown states. An API failure is unknown, never implicitly enabled. Current enablement can be disabled even when the last execution succeeded, and an enabled workflow can have a failed last run.
+
+GitHub automatically disables scheduled workflows in public repositories after 60 days without repository activity. Recurring workflow executions do not by themselves establish repository activity. A recent commit should not be assumed to re-enable an already-disabled workflow: verify the API state. Re-enable deliberately in Actions after investigating execution failures. This dashboard does not enable or rerun any workflow.
+
+Source: https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows
+
+Private email notices helped identify the cause, but email content, addresses, and message IDs are not published. The displayed reasons come from GitHub's public API state and documented behavior. API `updated_at` is not labeled as an exact disable timestamp. Billing restrictions are not inferred from absence of runs or from generic failures.

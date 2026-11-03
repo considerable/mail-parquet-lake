@@ -12,7 +12,21 @@ function duration(run){const start=Date.parse(run.run_started_at||run.created_at
 function formatDuration(seconds){return seconds===null?'—':seconds<60?`${Math.round(seconds)}s`:`${Math.floor(seconds/60)}m ${Math.round(seconds%60)}s`;}
 function safeLink(text,url,cls){const a=el('a',text,cls);try{const parsed=new URL(url);if(parsed.origin==='https://github.com'){a.href=parsed.href;a.target='_blank';a.rel='noopener';}}catch{}return a;}
 function filtered(){const days=$('window').value;return snapshot.runs.filter(r=>days==='all'||Date.parse(r.created_at)>=Date.now()-Number(days)*86400000);}
+function workflowState(name){return (snapshot.workflows||[]).find(w=>w.name===name)?.state||'unknown';}
+function stateLabel(value){return ({active:'Enabled',disabled_inactivity:'Disabled · inactivity',disabled_manually:'Disabled · manually',disabled_fork:'Disabled · fork',deleted:'Deleted',unknown:'Unknown'})[value]||value;}
+function stateReason(value){return ({active:'Workflow enabled. Execution success and data freshness are separate checks.',disabled_inactivity:'GitHub disabled scheduling after 60 days of repository inactivity. Re-enable deliberately in Actions.',disabled_manually:'Workflow was manually disabled. Confirm intent before re-enabling.',disabled_fork:'Workflow is disabled in a fork. Review and enable explicitly if needed.',deleted:'Workflow is deleted.',unknown:'Enablement could not be verified. Do not treat missing runs as healthy.'})[value]||'GitHub reported this workflow state; inspect the workflow for details.';}
+function renderFactors(){
+ const target=$('factors');target.replaceChildren();
+ for(const name of operational){const status=workflowState(name),row=el('article',undefined,'factor');row.append(el('h3',name),el('span',stateLabel(status),`badge ${status==='active'?'success':status==='unknown'?'neutral':'failure'}`),el('p',stateReason(status)));
+ const latest=snapshot.runs.find(r=>r.name===name);row.append(el('small',latest?`Last execution: ${latest.conclusion||latest.status} · ${date(latest.created_at)}. This is distinct from enablement.`:'No execution found in fetched history.'));
+ row.append(safeLink('Inspect workflow ↗',`https://github.com/${snapshot.repository}/actions/workflows/${name==='Gmail Sync'?'gmail-sync.yml':'job-tracker.yml'}`,'pipeline-link'));target.append(row);}
+ const blocked=operational.filter(name=>workflowState(name).startsWith('disabled')||workflowState(name)==='deleted');
+ const stale=Date.now()-Date.parse(snapshot.generated_at)>90*60000;
+ $('notice').className=`notice${stale||blocked.length||!snapshot.workflow_states_available?' warning':''}`;
+ $('notice').textContent=[stale?'Snapshot is over 90 minutes old; inspect the Dashboard workflow.':'',blocked.length?`${blocked.length} operational workflows are disabled. Past run failures do not explain this scheduling state.`:'',!snapshot.workflow_states_available?'Workflow enablement is unknown.':'','Data freshness and independent missed-schedule detection are not yet instrumented.'].filter(Boolean).join(' ');
+}
 function render(){
+ renderFactors();
  const rows=filtered(), ops=rows.filter(r=>operational.includes(r.name)), completed=ops.filter(r=>r.status==='completed');
  $('run-count').textContent=ops.length;
  $('success-rate').textContent=completed.length?`${Math.round(100*completed.filter(r=>r.conclusion==='success').length/completed.length)}%`:'—';
@@ -22,9 +36,9 @@ function render(){
  $('pipelines').replaceChildren();$('history').replaceChildren();
  for(const name of operational){
   const all=snapshot.runs.filter(r=>r.name===name), latest=all[0], success=all.find(r=>r.conclusion==='success');
-  const card=el('article',undefined,'pipeline'),top=el('div',undefined,'pipeline-top');top.append(el('h3',name),el('span',latest?(latest.conclusion||latest.status):'Unknown',`badge ${latest?state(latest):'neutral'}`));card.append(top,el('p',descriptions[name]));
+  const card=el('article',undefined,'pipeline'),top=el('div',undefined,'pipeline-top');top.append(el('h3',name),el('span',stateLabel(workflowState(name)),`badge ${workflowState(name)==='active'?'success':workflowState(name)==='unknown'?'neutral':'failure'}`));card.append(top,el('p',descriptions[name]));
   const facts=el('div',undefined,'facts');
-  for(const [label,value]of [['Last attempt',latest?`${date(latest.created_at)} · ${ago(latest.created_at)}`:'Not observed'],['Last success',success?`${date(success.updated_at)} · ${ago(success.updated_at)}`:'Not in fetched history'],['Latest run',latest?`#${latest.run_number} · attempt ${latest.run_attempt||1}`:'—'],['Data freshness','Not instrumented']]){const fact=el('div');fact.append(el('span',label),el('strong',value));facts.append(fact);}card.append(facts);if(latest)card.append(safeLink('Inspect latest run ↗',latest.html_url,'pipeline-link'));$('pipelines').append(card);
+  for(const [label,value]of [['Last attempt',latest?`${date(latest.created_at)} · ${ago(latest.created_at)}`:'Not observed'],['Last success',success?`${date(success.updated_at)} · ${ago(success.updated_at)}`:'Not in fetched history'],['Last execution outcome',latest?(latest.conclusion||latest.status):'Unknown'],['Latest run',latest?`#${latest.run_number} · attempt ${latest.run_attempt||1}`:'—'],['Data freshness','Not instrumented']]){const fact=el('div');fact.append(el('span',label),el('strong',value));facts.append(fact);}card.append(facts);if(latest)card.append(safeLink('Inspect latest run ↗',latest.html_url,'pipeline-link'));$('pipelines').append(card);
   const row=el('div',undefined,'history-row'),cells=el('div',undefined,'cells');row.append(el('strong',name),cells);
   const history=ops.filter(r=>r.name===name).slice(0,48).reverse();
   for(const run of history){const cell=safeLink('',run.html_url,`cell ${state(run)}`);cell.title=`${name} #${run.run_number}: ${run.conclusion||run.status} · ${date(run.created_at)}`;cell.setAttribute('aria-label',cell.title);cells.append(cell);}if(!history.length)cells.append(el('span','No recorded runs in this window','muted'));$('history').append(row);
