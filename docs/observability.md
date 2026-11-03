@@ -11,6 +11,7 @@ GitHub Pages collector, or GitHub Actions platform events.
 ## Contents
 
 - [Architecture](#architecture)
+- [Executive dashboard](#executive-dashboard)
 - [Destinations](#destinations)
 - [Workflow lifecycle and configuration](#workflow-lifecycle-and-configuration)
 - [Signals and meaning](#signals-and-meaning)
@@ -36,6 +37,134 @@ The Python SDK produces the telemetry. The Collector batches and routes it;
 CloudWatch and X-Ray store and query it. The Collector is not the dashboard or
 the long-term store. The email lake itself continues to store mail and attachment
 bytes in S3, independently of telemetry.
+
+## Executive dashboard
+
+[Open **MailLake-Executive** in CloudWatch](https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2#dashboards/dashboard/MailLake-Executive).
+Select `us-west-2`. The private dashboard contains aggregate counts and health
+evidence, without email subjects, addresses, filenames, attachment bytes or S3 keys.
+
+```mermaid
+flowchart LR
+    S3["Private S3 checkpoints and inventory"] --> OBS["Separate GitHub executive observer"]
+    GH["Workflow state and run metadata"] --> OBS
+    LOGS["Content-free run-mode events"] --> OBS
+    BILL["Billing allocation and tagged spend"] --> OBS
+    OBS --> DASH["MailLake-Executive dashboard"]
+    OBS --> METRICS["MailParquetLake/Executive metrics"]
+    METRICS --> ALARMS["CloudWatch evaluates alarms independently"]
+    STOP["Sync or observer stops"] -.-> ALARMS
+```
+
+### What the indicators mean
+
+| Indicator | Evidence and interpretation |
+|---|---|
+| Overall status | `CRITICAL` for overdue sync or a disabled workflow; `UNKNOWN` for unavailable operational evidence; `ATTENTION` for unfinished backfill or inventory older than 26 hours; `HEALTHY` requires current sync, active workflow, recent inventory and completed backfill |
+| Emails stored | Row counts across monthly Parquet files, not an estimate of Gmail mailbox size |
+| Attachments linked | Sum of committed email rows' `attachment_count`; excludes partially uploaded/unlinked blobs. Legacy null fields contribute no known attachments, so the total can undercount eventual coverage while backfill is unfinished |
+| Lake storage | S3 object bytes for email Parquet and attachments including manifests, in GiB; excludes reports and other operational files |
+| Mailbox freshness | Hours since successful full/incremental sync; neither backfill progress nor a connection test resets it |
+| Attachment completeness | Persisted scanned/file counts, completion flag and last progress timestamp; no percentage is estimated without a verified denominator |
+| Observed reliability | Classified real-sync successes/failures over 30 days; excludes probes, cancelled/running/skipped jobs and legacy runs with unknown mode |
+| Daily activity | OpenTelemetry indexing/capture counters by mode; reprocessing can count work again, and missing periods are not filled with healthy zeros |
+| Allocated cost | Tagged `Project=mail-parquet-lake` unblended spend through the last complete billing day; shared/untagged charges are excluded and AWS data may be delayed or estimated |
+
+The freshness deadline follows the existing Gmail UTC schedule plus a **90-minute
+completion allowance**: every day at 10:00 UTC, weekdays at 14:00/18:00/22:00 UTC,
+and Tuesday–Saturday at 00:00 UTC. This accommodates overnight/weekend gaps. Change
+`latest_due()` and its tests if the Gmail schedule changes.
+
+New successful full/incremental checkpoints include `last_success_at`. For legacy
+checkpoints, the S3 last-modified timestamp is used as an explicitly inferred
+fallback; a manual rewrite would affect that inference. No timestamp is reset to
+make the dashboard green. New GitHub run titles include their mode; older runs are
+classified only when `run_started` telemetry supplies a run ID/mode. The dashboard
+reports excluded legacy runs. No completed real runs means **unknown**, not 100%.
+A successful backfill pass can still leave historical work unfinished.
+
+### Scheduled collection and alarms
+
+[Executive Observability](../.github/workflows/executive.yml) runs every 15 minutes
+at UTC minutes 11/26/41/56, after Gmail Sync finishes, and manually. It has a
+separate concurrency group and always runs trusted `main` source. It can detect
+Gmail being disabled without depending on the sync process. If GitHub or the
+observer itself stops, CloudWatch still evaluates the missing-heartbeat alarms.
+No permanent AWS compute server is required.
+
+Inventory refreshes hourly during unfinished backfill, daily afterward, after a
+Gmail completion, or on an explicit refresh request. The measurement spans multiple
+S3 reads while writers can advance; its timestamp is shown and it is not an atomic
+bucket snapshot. Private caches are `<prefix>/reports/executive-inventory.json`
+and `<prefix>/reports/executive-status.json`. The observer never modifies mail,
+attachment objects or ingestion checkpoints and never accesses Gmail.
+
+Four console-only alarms use `MailParquetLake/Executive`, 15-minute periods and
+**missing data as breaching**:
+
+| Alarm | Condition |
+|---|---|
+| `MailLake-Executive-ObserverMissing` | Missing/below-one heartbeat for two periods |
+| `MailLake-Executive-SyncOverdue` | Scheduled freshness deadline missed, or freshness evidence missing |
+| `MailLake-Executive-SourceUnavailable` | Required source reads fail, or observer evidence disappears |
+| `MailLake-Executive-SyncDisabled` | Gmail workflow not active, or its enablement evidence missing |
+
+**No SNS subscriptions, email or other alarm actions are configured.** Alarm state
+is visible on the dashboard; a notification route needs a separate explicit
+choice. Scheduling/evaluation can delay alarms; this is not instantaneous detection.
+If collection stops, old cards remain visible with their observation timestamp;
+the independent alarms expose that staleness. Failed dashboard validation or
+publishing cannot emit a new successful heartbeat. Source failures publish an
+unavailable-source count without raw exceptions or private API payloads.
+
+### Cost and permissions
+
+At initial setup, the `Project` billing allocation tag is inactive and the bucket
+has no verified project-allocation tags. Cost therefore shows **Not yet attributable**,
+not $0. The collector does not activate account-wide billing tags, tag unrelated
+resources, reconstruct historical charges or claim the tagged subtotal is a
+complete project bill. Billing status/results are cached daily. Custom metrics,
+alarms, dashboard/API usage, inventory reads and any Cost Explorer calls follow
+normal AWS pricing; no zero-cost guarantee is made.
+
+[executive-policy.json](../observability/executive-policy.json) adds a role policy
+named `mail-lake-executive`. Metrics writes are restricted to the executive
+namespace, dashboard writes to this one dashboard, and telemetry reads to the
+mail-lake group. It also permits billing-allocation/usage reads and reuses existing
+scoped S3 permissions. No Gmail permission or new access key is added. The observer
+does not have alarm-creation permissions; alarms are a deployment action.
+
+### Deployment and verification
+
+Implementation: [collect_executive.py](../scripts/collect_executive.py),
+[executive_dashboard.py](../scripts/executive_dashboard.py),
+[deploy_executive.py](../scripts/deploy_executive.py) and
+[tests/test_executive.py](../tests/test_executive.py).
+From the repository root with the existing S3/AWS environment:
+
+```sh
+# Preview policy and alarm definitions without AWS changes.
+python scripts/deploy_executive.py
+# Provision only this feature's policy and console-only alarms.
+python scripts/deploy_executive.py --apply
+# Prepare a live aggregate preview without publishing.
+python scripts/collect_executive.py --refresh-inventory --output /tmp/mail-lake-executive.json
+# Publish dashboard, private snapshots and metrics.
+python scripts/collect_executive.py --publish --refresh-inventory
+```
+
+Use **Actions → Executive Observability → Run workflow**, optionally selecting
+`refresh_inventory`, for an immediate scheduled-role run. `GH_TOKEN` can be used
+locally for GitHub API rate limits. Verify a successful observer job, fresh metric
+datapoints, and alarm states separately; alarm evaluation may lag first publication.
+Console edits are replaced on refresh. Do not place aggregate snapshots/dashboard
+JSON into the public GitHub Pages directory.
+
+[infra/executive.tf](../infra/executive.tf) declares the same resources. Terraform
+creates an initial unknown-state placeholder and ignores subsequent body changes
+because the observer owns the rendered evidence. Import directly provisioned
+resources before managing them with Terraform. Do not apply all Terraform blindly:
+the separately proposed KMS encryption change remains a different approval decision.
 
 ## Destinations
 
@@ -254,8 +383,9 @@ These links are validation history, not a claim about their current status.
 | A known GitHub failure has no telemetry | Setup failures, disabled workflows and jobs that never reached Python cannot emit this application's failure event; use GitHub run history too |
 | Backfill totals differ from metrics | Checkpoints are cumulative mailbox-scan progress; counters cover work in the instrumented process and can include reprocessed upserts |
 
-This change does not replay old GitHub failures into CloudWatch. It also does not
-create a CloudWatch dashboard, notification channel or missed-run alarm.
+The application instrumentation does not replay old GitHub failures. The executive
+observer adds a dashboard and independent missing-heartbeat/sync alarms. It does
+not send notifications.
 
 ## Infrastructure
 

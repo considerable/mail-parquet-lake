@@ -198,3 +198,10 @@ For existing mail, run Gmail Sync in `attachment-backfill` mode. See
 Gmail Sync now sends content-free logs, metrics and traces to AWS. Logs and EMF
 metrics use `/mail-parquet-lake/otel` in `us-west-2`; metrics appear in namespace
 `MailParquetLake`, and traces use X-Ray. See [OpenTelemetry setup and queries](docs/observability.md).
+
+## Executive CloudWatch dashboard
+
+`MailLake-Executive` in `us-west-2` shows measured freshness, completeness,
+inventory, execution reliability and attributable cost. A separate observer and
+missing-heartbeat alarms keep absent data from appearing healthy. See the
+[dashboard setup and decision rules](docs/observability.md#executive-dashboard).

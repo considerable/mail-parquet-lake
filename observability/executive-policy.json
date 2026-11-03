@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublishExecutiveMetrics",
+      "Effect": "Allow",
+      "Action": ["cloudwatch:PutMetricData"],
+      "Resource": "*",
+      "Condition": {"StringEquals": {"cloudwatch:namespace": "MailParquetLake/Executive"}}
+    },
+    {
+      "Sid": "UpdateExecutiveDashboard",
+      "Effect": "Allow",
+      "Action": ["cloudwatch:PutDashboard"],
+      "Resource": "arn:aws:cloudwatch::ACCOUNT_ID:dashboard/MailLake-Executive"
+    },
+    {
+      "Sid": "ClassifyObservedSyncRuns",
+      "Effect": "Allow",
+      "Action": ["logs:FilterLogEvents"],
+      "Resource": "arn:aws:logs:us-west-2:ACCOUNT_ID:log-group:/mail-parquet-lake/otel:*"
+    },
+    {
+      "Sid": "ReadProjectBillingAllocation",
+      "Effect": "Allow",
+      "Action": ["ce:ListCostAllocationTags", "ce:GetCostAndUsage"],
+      "Resource": "*"
+    }
+  ]
+}

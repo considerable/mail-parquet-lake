@@ -1,0 +1,60 @@
+name: Executive Observability
+on:
+  schedule:
+    - cron: '11,26,41,56 * * * *'
+  workflow_run:
+    workflows: ['Gmail Sync']
+    types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/collect_executive.py'
+      - 'scripts/executive_dashboard.py'
+      - '.github/workflows/executive.yml'
+  workflow_dispatch:
+    inputs:
+      refresh_inventory:
+        description: Refresh the S3 inventory now
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: mail-lake-executive
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Always execute trusted main-branch code, including workflow_run events.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/job-tracker-ci
+          role-session-name: mail-lake-executive
+          aws-region: us-west-2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - run: pip install 'boto3>=1.34' 'pyarrow>=26' 'requests>=2.32.5,<3'
+      - name: Refresh executive evidence and dashboard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_PREFIX: ${{ secrets.S3_PREFIX }}
+          FORCE_INVENTORY: ${{ github.event_name == 'workflow_run' || inputs.refresh_inventory || false }}
+        run: |
+          if [ "$FORCE_INVENTORY" = "true" ]; then
+            python scripts/collect_executive.py --publish --refresh-inventory
+          else
+            python scripts/collect_executive.py --publish
+          fi

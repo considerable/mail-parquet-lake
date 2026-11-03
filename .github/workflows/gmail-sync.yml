@@ -1,4 +1,5 @@
 name: Gmail Sync
+run-name: Gmail Sync (${{ github.event.inputs.mode || 'incremental' }})
 on:
   schedule:
     - cron: '0 10 * * 1-5'  # Mon-Fri 6am ET (UTC-4)

@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import time
+from datetime import UTC, datetime
 from io import BytesIO
 
 from botocore.exceptions import ClientError
@@ -125,6 +126,7 @@ def load_sync_state(s3):
 
 
 def save_sync_state(s3, state):
+    state = {**state, "last_success_at": datetime.now(UTC).isoformat()}
     s3.put_object(Bucket=S3_BUCKET, Key=STATE_KEY, Body=json.dumps(state))
 
 
