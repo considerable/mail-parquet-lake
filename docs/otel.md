@@ -24,7 +24,7 @@ GitHub Pages collector, or GitHub Actions platform events.
 
 ```mermaid
 flowchart LR
-    SYNC[Python Gmail Sync] -->|OTLP HTTP on localhost:4318| COL[OpenTelemetry Collector]
+    SYNC["Python Gmail Sync"] -->|OTLP HTTP on localhost:4318| COL[OpenTelemetry Collector]
     COL -->|Signed OTLP logs| LOGS[CloudWatch Logs]
     COL -->|Embedded Metric Format| EMF[CloudWatch Logs: metrics stream]
     EMF --> METRICS[CloudWatch Metrics: MailParquetLake]
@@ -56,7 +56,7 @@ retention. Ingestion, custom metrics and trace storage can incur AWS charges.
 
 ## Workflow lifecycle and configuration
 
-The [Gmail Sync workflow](.github/workflows/gmail-sync.yml) performs these steps:
+The [Gmail Sync workflow](../.github/workflows/gmail-sync.yml) performs these steps:
 
 1. Check out the code and assume `job-tracker-ci` through GitHub OIDC.
 2. Request a six-hour AWS session and install the Python dependencies.
@@ -64,6 +64,31 @@ The [Gmail Sync workflow](.github/workflows/gmail-sync.yml) performs these steps
 4. Wait for the Collector's local health endpoint, then run the selected sync mode.
 5. Flush Python telemetry on exit; stop the Collector with a 30-second grace
    period, print its diagnostic logs to the GitHub job log, and remove it.
+
+
+```mermaid
+sequenceDiagram
+    participant GH as GitHub Actions
+    participant IAM as AWS IAM / OIDC
+    participant COL as Collector
+    participant APP as Gmail Sync + OTel SDK
+    participant AWS as CloudWatch / X-Ray
+    GH->>IAM: Assume job-tracker-ci (6-hour session)
+    IAM-->>GH: Temporary credentials
+    GH->>AWS: Create run log stream
+    GH->>COL: Start with temporary credentials
+    GH->>COL: Check localhost health endpoint
+    GH->>APP: Run selected sync mode
+    APP->>COL: run_started and OTLP signals
+    loop While sync processes mail
+        APP->>COL: Metrics every 30 seconds, batched logs and finished spans
+        COL->>AWS: Signed exports, batching and retries
+    end
+    APP->>COL: Final events and SDK flush
+    GH->>COL: Stop with 30-second grace period
+    COL->>AWS: Flush remaining batches
+    GH->>GH: Keep Collector diagnostics in job log
+```
 
 The Collector is version `0.164.0`, pinned to an image digest in the workflow.
 It receives OTLP/HTTP, not OTLP/gRPC. Although its listeners use `0.0.0.0`
@@ -121,11 +146,34 @@ reviewing its attributes first.
 
 Counters and histograms export deltas, so final flushes do not duplicate
 cumulative duration observations. The Python SDK and Collector use bounded
-memory queues, batching and retry backoff. SDK exporters time out after five seconds; the HTTP logs exporter retries
+memory queues, batching and retry backoff. SDK exporters time out after five
+seconds; the HTTP logs exporter retries
 for up to one minute. Shutdown flushes SDK queues and gives the Collector 30
 seconds to stop. Runner termination can still lose buffered telemetry; this is
 not a durable audit pipeline. Telemetry delivery errors are visible in Collector
 logs. A healthy process does not guarantee successful downstream ingestion.
+
+
+```mermaid
+flowchart TD
+    START["Workflow scheduled or dispatched"] --> RUN{"Runner reaches Python?"}
+    RUN -->|No| GH["Inspect GitHub setup failures or disabled workflow state"]
+    RUN -->|Yes| BEGIN["Emit run_started"]
+    BEGIN --> WORK["Process mail and commit page checkpoints"]
+    WORK --> EXIT{"How does the pass end?"}
+    EXIT -->|Returns normally| DONE["Emit run_finished"]
+    DONE --> COMPLETE{"Backfill complete flag?"}
+    COMPLETE -->|true| FINISHED["Historical scan complete"]
+    COMPLETE -->|false| PAUSED["Pass paused; resume from saved checkpoint"]
+    EXIT -->|Caught exception| FAIL["Emit run_failed and operation_failed"]
+    EXIT -->|Runner killed or forcibly interrupted| LOST["Final events or buffered telemetry may be missing"]
+    BEGIN -.-> VERIFY["Verify arrival separately in AWS"]
+    FAIL --> DIAG["Use error type, Collector diagnostics and GitHub logs"]
+```
+
+The completion-flag branch applies to attachment backfill. Full and incremental
+sync use their own completion behavior. Telemetry describes the work; the S3
+checkpoint determines where an interrupted backfill resumes.
 
 The runner's OTLP and health ports bind to localhost only. The Collector image is
 pinned by version and digest. `observability/collector.yaml` configures all three
@@ -227,16 +275,16 @@ usable without a running telemetry destination.
 
 | File | Responsibility |
 |---|---|
-| [sync/telemetry.py](sync/telemetry.py) | SDK providers, explicit events/counters/spans, privacy controls, final flush |
-| [sync/gmail_sync.py](sync/gmail_sync.py) | Run lifecycle, progress checkpoints, email upserts and fetch retry instrumentation |
-| [sync/attachments.py](sync/attachments.py) | Counts and bytes for newly committed attachment manifests |
-| [observability/collector.yaml](observability/collector.yaml) | OTLP receiver, batching, memory limits and AWS exporters |
-| [.github/workflows/gmail-sync.yml](.github/workflows/gmail-sync.yml) | OIDC session, Collector container lifecycle and instrumentation settings |
-| [infra/observability.tf](infra/observability.tf) | CloudWatch group, retention and role policy declaration |
-| [infra/iam-github-oidc.tf](infra/iam-github-oidc.tf) | Workflow role and maximum AWS session duration |
-| [observability/iam-policy.json](observability/iam-policy.json) | Equivalent IAM policy template for direct deployment |
-| [requirements.txt](requirements.txt) | Python SDK/exporter dependencies |
-| [tests/test_telemetry.py](tests/test_telemetry.py) | Disabled-by-default behavior, error privacy and Collector/IAM configuration checks |
+| [sync/telemetry.py](../sync/telemetry.py) | SDK providers, explicit events/counters/spans, privacy controls, final flush |
+| [sync/gmail_sync.py](../sync/gmail_sync.py) | Run lifecycle, progress checkpoints, email upserts and fetch retry instrumentation |
+| [sync/attachments.py](../sync/attachments.py) | Counts and bytes for newly committed attachment manifests |
+| [observability/collector.yaml](../observability/collector.yaml) | OTLP receiver, batching, memory limits and AWS exporters |
+| [.github/workflows/gmail-sync.yml](../.github/workflows/gmail-sync.yml) | OIDC session, Collector container lifecycle and instrumentation settings |
+| [infra/observability.tf](../infra/observability.tf) | CloudWatch group, retention and role policy declaration |
+| [infra/iam-github-oidc.tf](../infra/iam-github-oidc.tf) | Workflow role and maximum AWS session duration |
+| [observability/iam-policy.json](../observability/iam-policy.json) | Equivalent IAM policy template for direct deployment |
+| [requirements.txt](../requirements.txt) | Python SDK/exporter dependencies |
+| [tests/test_telemetry.py](../tests/test_telemetry.py) | Disabled-by-default behavior, error privacy and Collector/IAM configuration checks |
 
 For the separate attachment storage design and backfill recovery, see
-[Attachments in the email lake](docs/attachments.md).
+[Attachments in the email lake](attachments.md).
