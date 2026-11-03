@@ -273,3 +273,21 @@ def test_reader_schema_can_mix_old_and_new_partitions(tmp_path):
         params=[str(tmp_path / "*.parquet")],
     ).fetchall()
     assert rows == [("new", 3), ("old", None)]
+
+
+@pytest.mark.parametrize("state", [None, {"complete": True}])
+def test_schedule_does_not_start_a_new_or_repeat_complete_backfill(monkeypatch, state):
+    monkeypatch.setattr(sync, "read_json", lambda *args: state)
+    backfill = MagicMock()
+    monkeypatch.setattr(sync, "backfill_attachments", backfill)
+    sync.resume_pending_backfill(gmail(), MemoryS3(), 3600)
+    backfill.assert_not_called()
+
+
+def test_schedule_resumes_only_pending_backfill(monkeypatch):
+    monkeypatch.setattr(sync, "read_json", lambda *args: {"complete": False})
+    backfill = MagicMock(return_value={"complete": True})
+    monkeypatch.setattr(sync, "backfill_attachments", backfill)
+    service, s3 = gmail(), MemoryS3()
+    assert sync.resume_pending_backfill(service, s3, 3600) == {"complete": True}
+    backfill.assert_called_once_with(service, s3, 3600)

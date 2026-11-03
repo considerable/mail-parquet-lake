@@ -73,5 +73,9 @@ jobs:
         run: |
           echo "## 📬 Gmail Sync — $(date +%Y-%m-%d) ($SYNC_MODE)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          python3 sync/gmail_sync.py --"$SYNC_MODE" 2>&1
+          if [ "$SYNC_MODE" = "incremental" ]; then
+            python3 sync/gmail_sync.py --incremental --resume-pending-backfill --max-seconds 3600
+          else
+            python3 sync/gmail_sync.py --"$SYNC_MODE"
+          fi
           echo "✅ Requested sync pass complete (backfill progress is in the run log)" >> $GITHUB_STEP_SUMMARY

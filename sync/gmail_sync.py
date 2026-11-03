@@ -225,6 +225,13 @@ def backfill_attachments(service, s3, max_seconds=14400):
             return state
 
 
+def resume_pending_backfill(service, s3, max_seconds):
+    state = read_json(s3, S3_BUCKET, BACKFILL_KEY)
+    if state and not state.get("complete"):
+        return backfill_attachments(service, s3, max_seconds)
+    return state
+
+
 def write_parquet(records, s3):
     """Write records to S3 Parquet, partitioned by year/month."""
     if not records:
@@ -380,6 +387,7 @@ if __name__ == "__main__":
     mode.add_argument("--incremental", action="store_true")
     mode.add_argument("--attachment-backfill", action="store_true")
     parser.add_argument("--max-seconds", type=int, default=14400)
+    parser.add_argument("--resume-pending-backfill", action="store_true")
     args = parser.parse_args()
 
     service = get_gmail_service()
@@ -403,6 +411,8 @@ if __name__ == "__main__":
     elif args.full:
         sync_full(service, s3)
     elif args.incremental:
+        if args.resume_pending_backfill:
+            resume_pending_backfill(service, s3, args.max_seconds)
         sync_incremental(service, s3)
     else:
         print("Use --full or --incremental")

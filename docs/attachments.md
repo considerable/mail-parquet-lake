@@ -48,7 +48,9 @@ attachment-bearing email count, file count, completion and the next page token.
 A page is checkpointed only after files, manifests and email rows are written.
 The incremental `sync_state.json` is never advanced by backfill. If interrupted,
 run the same mode again. A pass stops at a page boundary after four hours by
-default; re-run until `complete=True`. `--max-seconds` sets the local pass budget.
+default; re-run until `complete=True`. Scheduled incremental runs also resume
+an unfinished backfill for up to one hour before their regular delta sync, so a
+long backfill continues automatically. `--max-seconds` sets the local pass budget.
 An already complete backfill exits without scanning again; subsequent messages
 are handled by regular incremental sync. If a saved Gmail page token expires,
 the backfill fails visibly; restart from the beginning by explicitly resetting
