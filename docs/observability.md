@@ -51,7 +51,11 @@ bytes in S3, independently of telemetry.
   within spans carry trace/span context for correlation. No account-wide
   Transaction Search destination change is required or made.
 
-Log retention is 30 days for this new group. This does not set metric or trace
+Log retention is 30 days. Terraform now declares a customer-managed KMS key
+`alias/mail-parquet-lake-otel`, scoped to this group, with automatic key rotation.
+The live group still uses AWS-managed encryption until the proposed key and IAM
+changes receive explicit approval and are applied. Existing log events retain
+their original encryption when a key is associated. This does not set metric or trace
 retention. Ingestion, custom metrics and trace storage can incur AWS charges.
 
 ## Workflow lifecycle and configuration
@@ -255,9 +259,11 @@ create a CloudWatch dashboard, notification channel or missed-run alarm.
 
 ## Infrastructure
 
-`infra/observability.tf` describes the group and permissions.
+`infra/observability.tf` describes the group, customer-managed encryption key
+and permissions. The KMS key is protected against Terraform deletion so retained
+logs do not become unreadable. Keep the key enabled while encrypted logs exist.
 `observability/iam-policy.json` is the equivalent inline policy template; replace
-`ACCOUNT_ID` at deployment. If the resources were provisioned directly, import
+`ACCOUNT_ID` and `KEY_ID` at deployment. If the resources were provisioned directly, import
 them into Terraform state before applying this repository's Terraform. Do not
 apply default bucket/prefix variables to an existing lake without checking them.
 
@@ -288,3 +294,21 @@ usable without a running telemetry destination.
 
 For the separate attachment storage design and backfill recovery, see
 [Attachments in the email lake](attachments.md).
+
+## Repository checks and network recovery
+
+Workflow action revisions are pinned to full commit hashes. Dependabot continues
+to propose updated pins. Python dependency updates have a seven-day cooldown;
+GitHub Actions does not support cooldown, so only that ecosystem's unsupported
+cooldown scanner finding has a documented exception. The security checks remain
+enabled. Cloud-backed AI reviews run only for trusted same-repository human pull
+requests; Dependabot and fork PRs still run secret detection, Semgrep, dependency
+audit, lint and tests without receiving AWS secrets.
+
+Transient Gmail connection failures, including a broken pipe during automatic
+access-token refresh, retry up to five times with exponential backoff and jitter.
+Gmail HTTP rate-limit/server-error retries are also handled by the Google client.
+Permanent OAuth denial is not retried. A failed page leaves its backfill checkpoint
+unchanged, allowing the next invocation to resume. These retry attempts are not
+all included in `lake_gmail_fetch_retries`, which counts the outer individual
+message-fetch retry loop only.

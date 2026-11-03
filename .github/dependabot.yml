@@ -1,9 +1,14 @@
 version: 2
 updates:
   - package-ecosystem: pip
+    cooldown:
+      default-days: 7
     directory: /
     schedule:
       interval: weekly
+  # GitHub Actions does not support cooldown; action commits are SHA-pinned.
+  # https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown
+  # nosemgrep: package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown
   - package-ecosystem: github-actions
     directory: /
     schedule:

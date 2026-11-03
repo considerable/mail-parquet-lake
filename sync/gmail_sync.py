@@ -17,9 +17,11 @@ from botocore.exceptions import ClientError
 
 try:
     from .attachments import attachment_parts, decode_data, read_json, store_attachments
+    from .gmail_requests import execute_batch, execute_request, retry_transport
     from .telemetry import telemetry
 except ImportError:
     from attachments import attachment_parts, decode_data, read_json, store_attachments
+    from gmail_requests import execute_batch, execute_request, retry_transport
     from telemetry import telemetry
 import boto3
 import pandas as pd
@@ -51,7 +53,7 @@ def get_gmail_service():
         creds = Credentials.from_authorized_user_file(token_file, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            retry_transport(lambda: creds.refresh(Request()))
         else:
             if os.getenv("GMAIL_NONINTERACTIVE") == "1":
                 raise RuntimeError("Gmail token requires renewed authorization")
@@ -69,11 +71,8 @@ def get_s3_client():
 def _fetch_message(service, msg_id, retries=3):
     for attempt in range(retries):
         try:
-            return (
-                service.users()
-                .messages()
-                .get(userId="me", id=msg_id, format="full")
-                .execute()
+            return execute_request(
+                service.users().messages().get(userId="me", id=msg_id, format="full")
             )
         except HttpError as e:
             if e.resp.status == 404:
@@ -108,7 +107,7 @@ def _fetch_messages(service, references):
                 .get(userId="me", id=ref["id"], format="full"),
                 request_id=ref["id"],
             )
-        batch.execute()
+        execute_batch(batch)
         for ref in subset:
             if ref["id"] in errors or ref["id"] not in fetched:
                 fetched[ref["id"]] = _fetch_message(service, ref["id"])
@@ -198,7 +197,7 @@ def backfill_attachments(service, s3, max_seconds=14400):
         kwargs = {"userId": "me", "maxResults": 100, "includeSpamTrash": True}
         if state.get("next_page_token"):
             kwargs["pageToken"] = state["next_page_token"]
-        result = service.users().messages().list(**kwargs).execute(num_retries=5)
+        result = execute_request(service.users().messages().list(**kwargs))
         records = []
         count = 0
         for message in _fetch_messages(service, result.get("messages", [])):
@@ -284,7 +283,7 @@ def sync_full(service, s3):
         if page_token:
             kwargs["pageToken"] = page_token
 
-        result = service.users().messages().list(**kwargs).execute()
+        result = execute_request(service.users().messages().list(**kwargs))
         messages = result.get("messages", [])
 
         for msg_ref in messages:
@@ -339,7 +338,7 @@ def sync_incremental(service, s3):
             kwargs["pageToken"] = page_token
 
         try:
-            result = service.users().history().list(**kwargs).execute()
+            result = execute_request(service.users().history().list(**kwargs))
         except Exception as e:
             raise RuntimeError(
                 "History API failed; checkpoint not advanced. A full sync may be needed."

@@ -25,7 +25,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 resource "aws_iam_role" "job_tracker_ci" {
   name                 = "job-tracker-ci"
   max_session_duration = 21600
-  tags = { Project = "mail-parquet-lake" }
+  tags                 = { Project = "mail-parquet-lake" }
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -92,9 +92,9 @@ resource "aws_iam_role_policy" "s3_access" {
         Resource = "arn:aws:codeguru-reviewer:us-west-2:${data.aws_caller_identity.current.account_id}:*"
       },
       {
-        Sid      = "BedrockInvoke"
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel"]
+        Sid    = "BedrockInvoke"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
         # nosemgrep: terraform.lang.security.iam.no-iam-data-exfiltration.no-iam-data-exfiltration
         Resource = [
           "arn:aws:bedrock:*::foundation-model/amazon.nova-micro-v1:0",

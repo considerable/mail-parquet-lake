@@ -8,8 +8,10 @@ from datetime import UTC, datetime
 from botocore.exceptions import ClientError
 
 try:
+    from .gmail_requests import execute_request
     from .telemetry import telemetry
 except ImportError:
+    from gmail_requests import execute_request
     from telemetry import telemetry
 
 SCHEMA_VERSION = 1
@@ -67,13 +69,12 @@ def store_attachments(service, s3, bucket, prefix, message):
     for path, part, headers in parts:
         body = part["body"]
         if "attachmentId" in body:
-            encoded = (
+            encoded = execute_request(
                 service.users()
                 .messages()
                 .attachments()
                 .get(userId="me", messageId=message_id, id=body["attachmentId"])
-                .execute(num_retries=5)["data"]
-            )
+            )["data"]
         else:
             encoded = body["data"]
         data = decode_data(encoded)

@@ -4,13 +4,35 @@
     {
       "Sid": "WriteLakeTelemetryLogs",
       "Effect": "Allow",
-      "Action": ["logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"],
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:DescribeLogStreams",
+        "logs:PutLogEvents"
+      ],
       "Resource": "arn:aws:logs:us-west-2:ACCOUNT_ID:log-group:/mail-parquet-lake/otel:*"
+    },
+    {
+      "Sid": "UseLakeTelemetryKeyThroughCloudWatch",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:GenerateDataKey*",
+        "kms:DescribeKey"
+      ],
+      "Resource": "arn:aws:kms:us-west-2:ACCOUNT_ID:key/KEY_ID",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "logs.us-west-2.amazonaws.com"
+        }
+      }
     },
     {
       "Sid": "WriteLakeTraces",
       "Effect": "Allow",
-      "Action": ["xray:PutTraceSegments"],
+      "Action": [
+        "xray:PutTraceSegments"
+      ],
       "Resource": "*"
     }
   ]

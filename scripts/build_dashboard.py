@@ -6,23 +6,30 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.error import URLError
+
+import requests
 
 
 def api(path):
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         return json.loads(subprocess.check_output(["gh", "api", path], text=True))
-    request = Request(
+    # The host is fixed; paths cannot select a URL scheme or redirect credentials.
+    response = requests.get(
         "https://api.github.com/" + path,
         headers={
             "Authorization": "Bearer " + token,
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         },
+        timeout=30,
+        allow_redirects=False,
     )
-    with urlopen(request, timeout=30) as response:
-        return json.load(response)
+    if 300 <= response.status_code < 400:
+        raise URLError("Unexpected GitHub API redirect")
+    response.raise_for_status()
+    return response.json()
 
 
 def public_run(run):
@@ -97,7 +104,12 @@ def collect(repository, max_pages=5, detail_limit=30):
             )
             run["jobs"] = [public_job(job) for job in data["jobs"]]
             run["job_details_complete"] = data["total_count"] <= len(data["jobs"])
-        except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        except (
+            OSError,
+            requests.RequestException,
+            subprocess.CalledProcessError,
+            json.JSONDecodeError,
+        ):
             # Preserve overview when optional details fail. Do not publish API errors.
             run["jobs"] = []
             run["job_details_complete"] = False
@@ -105,7 +117,12 @@ def collect(repository, max_pages=5, detail_limit=30):
     try:
         workflows = collect_workflows(repository)
         workflow_states_available = True
-    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+    except (
+        OSError,
+        requests.RequestException,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+    ):
         workflows = []
         workflow_states_available = False
         warnings.append("Workflow enablement state unavailable; do not assume active")

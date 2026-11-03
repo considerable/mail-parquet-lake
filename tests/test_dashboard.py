@@ -106,3 +106,36 @@ class DashboardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApiSecurityTests(unittest.TestCase):
+    def test_api_uses_fixed_https_host_and_disables_redirects(self):
+        from unittest.mock import MagicMock
+
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"workflow_runs": []}
+        with (
+            patch.dict("os.environ", {"GH_TOKEN": "test-token"}),
+            patch.object(module.requests, "get", return_value=response) as get,
+        ):
+            self.assertEqual(
+                module.api("repos/owner/repo/actions/runs"), {"workflow_runs": []}
+            )
+        self.assertEqual(
+            get.call_args.args[0],
+            "https://api.github.com/repos/owner/repo/actions/runs",
+        )
+        self.assertFalse(get.call_args.kwargs["allow_redirects"])
+        self.assertEqual(get.call_args.kwargs["timeout"], 30)
+
+    def test_redirect_does_not_forward_credentials(self):
+        from unittest.mock import MagicMock
+
+        with (
+            patch.dict("os.environ", {"GH_TOKEN": "test-token"}),
+            patch.object(
+                module.requests, "get", return_value=MagicMock(status_code=302)
+            ),
+            self.assertRaises(OSError),
+        ):
+            module.api("repos/owner/repo/actions/runs")
