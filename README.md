@@ -192,3 +192,9 @@ Full and incremental sync now preserve original attachment bytes in private S3,
 linked to their parent email through `attachment_count` and `attachments_json`.
 For existing mail, run Gmail Sync in `attachment-backfill` mode. See
 [storage layout, recovery and retrieval](docs/attachments.md).
+
+## OpenTelemetry
+
+Gmail Sync now sends content-free logs, metrics and traces to AWS. Logs and EMF
+metrics use `/mail-parquet-lake/otel` in `us-west-2`; metrics appear in namespace
+`MailParquetLake`, and traces use X-Ray. See [instrumentation and queries](docs/observability.md).

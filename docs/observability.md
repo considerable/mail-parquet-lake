@@ -51,7 +51,9 @@ reviewing its attributes first.
 
 ## Reliability and limitations
 
-The Python SDK and Collector use bounded memory queues, batching and retry
+Counters and histograms export deltas, so final flushes do not duplicate
+cumulative duration observations. The Python SDK and Collector use bounded
+memory queues, batching and retry
 backoff. SDK exporters time out after five seconds; the HTTP logs exporter retries
 for up to one minute. Shutdown flushes SDK queues and gives the Collector 30
 seconds to stop. Runner termination can still lose buffered telemetry; this is

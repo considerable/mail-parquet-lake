@@ -19,7 +19,7 @@ processors:
     send_batch_size: 64
     send_batch_max_size: 128
 exporters:
-  otlphttp/logs:
+  otlp_http/logs:
     logs_endpoint: https://logs.${env:AWS_REGION}.amazonaws.com/v1/logs
     auth:
       authenticator: sigv4auth/logs
@@ -57,7 +57,7 @@ service:
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlphttp/logs]
+      exporters: [otlp_http/logs]
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]

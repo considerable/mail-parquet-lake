@@ -12,8 +12,11 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.extension.aws.trace import AwsXRayIdGenerator
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics import Counter, Histogram, MeterProvider
+from opentelemetry.sdk.metrics.export import (
+    AggregationTemporality,
+    PeriodicExportingMetricReader,
+)
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -55,7 +58,14 @@ class Telemetry:
         trace.set_tracer_provider(self.traces)
         self.tracer = self.traces.get_tracer("mail-parquet-lake")
         reader = PeriodicExportingMetricReader(
-            OTLPMetricExporter(endpoint=endpoint + "/v1/metrics", timeout=5),
+            OTLPMetricExporter(
+                endpoint=endpoint + "/v1/metrics",
+                timeout=5,
+                preferred_temporality={
+                    Counter: AggregationTemporality.DELTA,
+                    Histogram: AggregationTemporality.DELTA,
+                },
+            ),
             export_interval_millis=30000,
         )
         self.metrics = MeterProvider(resource=resource, metric_readers=[reader])
