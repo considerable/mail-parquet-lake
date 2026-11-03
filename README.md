@@ -136,6 +136,10 @@ make query Q="recruiter emails last 30 days"
 | `make prune` | Remove export .md files older than N days |
 | `make test` | Run pytest suite |
 
+## Workflow dashboard
+
+[Open the Workflow Observatory](https://considerable.github.io/mail-parquet-lake/) for historical run status, duration trends, failed step names, and links to GitHub Actions. It refreshes after operational workflow completion and approximately every 30 minutes. Only public-safe workflow metadata is published; email contents and reports are excluded. See [dashboard documentation](dashboard/README.md) for coverage and limitations.
+
 ## GitHub Actions
 
 | Workflow | Schedule | On-demand | What it does |

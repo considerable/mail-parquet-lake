@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Public GitHub Actions execution history for mail-parquet-lake.">
+<title>Mail Lake · Workflow Observatory</title>
+<link rel="stylesheet" href="style.css"><script src="app.js" defer></script>
+</head>
+<body>
+<header><a class="brand" href="./"><span class="logo">▤</span> MAIL LAKE <span class="brand-sub">/ OBSERVATORY</span></a><a href="https://github.com/considerable/mail-parquet-lake/actions" target="_blank" rel="noopener">Open GitHub Actions ↗</a></header>
+<main>
+<div class="eyebrow"><span class="dot"></span> PIPELINE OPERATIONS</div>
+<section class="intro"><div><h1>A clear view of<br>every run.</h1><p>Gmail to Parquet. Parquet to insight.<br>Execution history for the jobs that keep the lake moving.</p></div><div class="snapshot"><span class="label">LATEST SNAPSHOT</span><strong id="snapshot">Loading…</strong><span id="snapshot-age">Fetching workflow metadata</span><button id="reload" type="button">Refresh snapshot ↻</button></div></section>
+<div id="notice" class="notice" role="status">Loading recorded history…</div>
+<section class="controls" aria-label="History filters"><div><label for="window">History window</label><select id="window"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="all">All fetched history</option></select></div><div class="legend"><span><i class="success"></i>Success</span><span><i class="failure"></i>Failure</span><span><i class="pending"></i>Active</span><span><i class="neutral"></i>Other</span></div></section>
+<section class="metrics" aria-label="Execution overview"><article><span class="label">OBSERVED RUNS</span><strong id="run-count">—</strong><small>Operational workflows · all triggers</small></article><article><span class="label">SUCCESS RATE</span><strong id="success-rate">—</strong><small>Success ÷ completed attempts shown</small></article><article><span class="label">FAILED RUNS</span><strong id="failure-count">—</strong><small>Open a run below for its error log</small></article><article><span class="label">MEDIAN ELAPSED</span><strong id="median">—</strong><small>Run start → last update · approximate</small></article></section>
+<section class="section-head"><div><span class="eyebrow">01 / HEALTH</span><h2>The operational pipelines</h2></div><span class="muted">Latest recorded state · independent of time filter</span></section>
+<section id="pipelines" class="pipelines" aria-label="Pipeline health"></section>
+<section class="panel history-panel"><div class="panel-head"><div><h2>Run history</h2><p>Latest 48 executions per workflow in this window. Newest at right.</p></div><span class="tag">ACTUAL RUNS, NOT EXPECTED SLOTS</span></div><div id="history"></div></section>
+<section class="panel"><div class="panel-head"><div><h2>Execution duration</h2><p>Approximate elapsed seconds for the latest 60 completed operational runs.</p></div></div><div id="chart" class="chart" role="img" aria-label="Execution duration chart"></div><p id="chart-summary" class="chart-caption"></p></section>
+<section class="section-head"><div><span class="eyebrow">02 / INVESTIGATE</span><h2>Follow the failure.</h2></div><div><label class="sr-only" for="workflow">Workflow</label><select id="workflow"><option value="all">All workflows</option></select> <label class="sr-only" for="outcome">Outcome</label><select id="outcome"><option value="all">All outcomes</option><option value="failure" selected>Failures only</option><option value="success">Success only</option></select></div></section>
+<section class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>Workflow / run</th><th>Started</th><th>Outcome</th><th>Failed step / detail</th><th>Elapsed</th><th></th></tr></thead><tbody id="runs"></tbody></table></div><div class="table-footer"><span id="table-summary"></span><button id="more" type="button">Show more runs ↓</button></div></section>
+<section class="notes"><div><h3>Execution health ≠ data freshness</h3><p>A successful run does not prove that every email was synchronized or that the report used fresh data. Application checkpoints and output validation are not instrumented yet.</p></div><div><h3>Public by design</h3><p>Only workflow metadata is published. No email content, reports, raw logs, credentials, or job artifacts are collected. Detailed job steps cover the latest 30 runs.</p></div><div><h3>Know the blind spots</h3><p>Refreshes after operational workflows finish and roughly every 30 minutes. GitHub schedules can be delayed. Missing executions are not labeled successful; independent missed-run detection is not enabled.</p></div></section>
+<footer><span>MAIL LAKE / WORKFLOW OBSERVATORY</span><span id="coverage">GitHub Actions metadata</span><a href="https://github.com/considerable/mail-parquet-lake" target="_blank" rel="noopener">Source ↗</a></footer>
+</main>
+</body></html>

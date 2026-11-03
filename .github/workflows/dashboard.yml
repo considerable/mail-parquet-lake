@@ -1,0 +1,61 @@
+name: Dashboard
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard/**'
+      - 'scripts/build_dashboard.py'
+      - 'tests/test_dashboard.py'
+      - '.github/workflows/dashboard.yml'
+  schedule:
+    - cron: '23,53 * * * *'
+  workflow_run:
+    workflows: ['Gmail Sync', 'Job Tracker', 'Security & Code Quality']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-dashboard
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      # Always use trusted default-branch source, never triggering PR artifacts/code.
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: python -m unittest discover -s tests -p 'test_dashboard.py'
+      - name: Collect public workflow metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/build_dashboard.py
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dashboard
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy dashboard
+        id: deployment
+        uses: actions/deploy-pages@v4
