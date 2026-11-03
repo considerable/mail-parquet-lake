@@ -23,6 +23,8 @@ def test_error_spans_and_logs_exclude_private_exception_text(monkeypatch):
     spans = InMemorySpanExporter()
     reader = InMemoryMetricReader()
     monkeypatch.setenv("LAKE_TELEMETRY_ENABLED", "1")
+    monkeypatch.setenv("LAKE_METRICS_ENABLED", "1")
+    monkeypatch.setenv("LAKE_TRACES_ENABLED", "1")
     monkeypatch.setattr(module, "OTLPLogExporter", lambda **kwargs: logs)
     monkeypatch.setattr(module, "OTLPSpanExporter", lambda **kwargs: spans)
     monkeypatch.setattr(module, "OTLPMetricExporter", lambda **kwargs: object())
@@ -73,12 +75,8 @@ def test_collector_and_iam_are_scoped_to_selected_log_group():
 
     root = Path(__file__).resolve().parents[1]
     config = yaml.safe_load((root / "observability/collector.yaml").read_text())
-    assert config["exporters"]["awsemf"]["namespace"] == "MailParquetLake"
-    assert (
-        config["exporters"]["awsemf"]["resource_to_telemetry_conversion"]["enabled"]
-        is False
-    )
-    assert config["exporters"]["awsxray"]["local_mode"] is True
+    assert set(config["service"]["pipelines"]) == {"logs"}
+    assert set(config["exporters"]) == {"otlp_http/logs"}
     policy = json.loads((root / "observability/iam-policy.json").read_text())
     logs = policy["Statement"][0]
     assert logs["Action"] == [
@@ -87,3 +85,29 @@ def test_collector_and_iam_are_scoped_to_selected_log_group():
         "logs:PutLogEvents",
     ]
     assert ":log-group:/mail-parquet-lake/otel:" in logs["Resource"]
+
+
+def test_low_cost_default_exports_logs_but_never_creates_metric_or_trace_exporters(
+    monkeypatch,
+):
+    from unittest.mock import MagicMock
+
+    logs = InMemoryLogRecordExporter()
+    monkeypatch.setenv("LAKE_TELEMETRY_ENABLED", "1")
+    monkeypatch.delenv("LAKE_METRICS_ENABLED", raising=False)
+    monkeypatch.delenv("LAKE_TRACES_ENABLED", raising=False)
+    metric_export, trace_export = MagicMock(), MagicMock()
+    monkeypatch.setattr(module, "OTLPLogExporter", lambda **kwargs: logs)
+    monkeypatch.setattr(module, "OTLPMetricExporter", metric_export)
+    monkeypatch.setattr(module, "OTLPSpanExporter", trace_export)
+    telemetry = module.Telemetry()
+    telemetry.configure("incremental")
+    telemetry.count("lake_messages_scanned", 10)
+    with telemetry.operation("sync.run"):
+        telemetry.event("test_event")
+    telemetry.logs.force_flush()
+    assert any(r.log_record.body == "test_event" for r in logs.get_finished_logs())
+    assert telemetry.metrics is None and telemetry.traces is None
+    metric_export.assert_not_called()
+    trace_export.assert_not_called()
+    telemetry.close()

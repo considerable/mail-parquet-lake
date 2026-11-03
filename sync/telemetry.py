@@ -27,6 +27,9 @@ class Telemetry:
     def __init__(self):
         self.enabled = False
         self.mode = "unknown"
+        self.metrics = None
+        self.traces = None
+        self.duration = None
 
     def configure(self, mode):
         if os.getenv("LAKE_TELEMETRY_ENABLED") != "1":
@@ -44,36 +47,40 @@ class Telemetry:
         endpoint = os.getenv(
             "OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318"
         ).rstrip("/")
-        self.traces = TracerProvider(
-            resource=resource, id_generator=AwsXRayIdGenerator()
-        )
-        self.traces.add_span_processor(
-            BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=endpoint + "/v1/traces", timeout=5),
-                max_queue_size=512,
-                max_export_batch_size=64,
+        if os.getenv("LAKE_TRACES_ENABLED", "0") == "1":
+            self.traces = TracerProvider(
+                resource=resource, id_generator=AwsXRayIdGenerator()
             )
-        )
-        # Set the context provider so the log bridge includes the active trace ID.
-        trace.set_tracer_provider(self.traces)
-        self.tracer = self.traces.get_tracer("mail-parquet-lake")
-        reader = PeriodicExportingMetricReader(
-            OTLPMetricExporter(
-                endpoint=endpoint + "/v1/metrics",
-                timeout=5,
-                preferred_temporality={
-                    Counter: AggregationTemporality.DELTA,
-                    Histogram: AggregationTemporality.DELTA,
-                },
-            ),
-            export_interval_millis=30000,
-        )
-        self.metrics = MeterProvider(resource=resource, metric_readers=[reader])
-        self.meter = self.metrics.get_meter("mail-parquet-lake")
-        self.counters = {}
-        self.duration = self.meter.create_histogram(
-            "lake_operation_duration_seconds", unit="s"
-        )
+            self.traces.add_span_processor(
+                BatchSpanProcessor(
+                    OTLPSpanExporter(endpoint=endpoint + "/v1/traces", timeout=5),
+                    max_queue_size=512,
+                    max_export_batch_size=64,
+                )
+            )
+            # Set the context provider so the log bridge includes the active trace ID.
+            trace.set_tracer_provider(self.traces)
+            self.tracer = self.traces.get_tracer("mail-parquet-lake")
+        else:
+            self.tracer = trace.NoOpTracerProvider().get_tracer("mail-parquet-lake")
+        if os.getenv("LAKE_METRICS_ENABLED", "0") == "1":
+            reader = PeriodicExportingMetricReader(
+                OTLPMetricExporter(
+                    endpoint=endpoint + "/v1/metrics",
+                    timeout=5,
+                    preferred_temporality={
+                        Counter: AggregationTemporality.DELTA,
+                        Histogram: AggregationTemporality.DELTA,
+                    },
+                ),
+                export_interval_millis=30000,
+            )
+            self.metrics = MeterProvider(resource=resource, metric_readers=[reader])
+            self.meter = self.metrics.get_meter("mail-parquet-lake")
+            self.counters = {}
+            self.duration = self.meter.create_histogram(
+                "lake_operation_duration_seconds", unit="s"
+            )
         self.logs = LoggerProvider(resource=resource)
         self.logs.add_log_record_processor(
             BatchLogRecordProcessor(
@@ -92,7 +99,7 @@ class Telemetry:
         self.count("lake_runs_started", 1)
 
     def count(self, name, value, **dimensions):
-        if not self.enabled:
+        if not self.enabled or self.metrics is None:
             return
         if name not in self.counters:
             self.counters[name] = self.meter.create_counter(name)
@@ -136,15 +143,18 @@ class Telemetry:
                 )
                 raise
             finally:
-                self.duration.record(
-                    time.monotonic() - started, {"mode": self.mode, "operation": name}
-                )
+                if self.duration is not None:
+                    self.duration.record(
+                        time.monotonic() - started,
+                        {"mode": self.mode, "operation": name},
+                    )
 
     def close(self):
         if self.enabled:
             for provider in [self.metrics, self.logs, self.traces]:
-                provider.force_flush(timeout_millis=10000)
-                provider.shutdown()
+                if provider is not None:
+                    provider.force_flush(timeout_millis=10000)
+                    provider.shutdown()
             self.logger.removeHandler(self.handler)
             self.enabled = False
 

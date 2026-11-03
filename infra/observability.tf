@@ -1,3 +1,9 @@
+variable "enable_customer_managed_log_key" {
+  description = "Opt in to a billable customer-managed log encryption key."
+  type        = bool
+  default     = false
+}
+
 data "aws_region" "current" {}
 
 locals {
@@ -5,6 +11,7 @@ locals {
 }
 
 resource "aws_kms_key" "lake_otel" {
+  count                   = var.enable_customer_managed_log_key ? 1 : 0
   description             = "CloudWatch encryption for mail-parquet-lake telemetry"
   enable_key_rotation     = true
   deletion_window_in_days = 30
@@ -36,14 +43,15 @@ resource "aws_kms_key" "lake_otel" {
 }
 
 resource "aws_kms_alias" "lake_otel" {
+  count         = var.enable_customer_managed_log_key ? 1 : 0
   name          = "alias/mail-parquet-lake-otel"
-  target_key_id = aws_kms_key.lake_otel.key_id
+  target_key_id = aws_kms_key.lake_otel[0].key_id
 }
 
 resource "aws_cloudwatch_log_group" "lake_otel" {
   name              = "/mail-parquet-lake/otel"
   retention_in_days = 30
-  kms_key_id        = aws_kms_key.lake_otel.arn
+  kms_key_id        = var.enable_customer_managed_log_key ? aws_kms_key.lake_otel[0].arn : null
 }
 
 resource "aws_iam_role_policy" "lake_otel" {
@@ -51,25 +59,21 @@ resource "aws_iam_role_policy" "lake_otel" {
   role = aws_iam_role.job_tracker_ci.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"]
         Resource = "${aws_cloudwatch_log_group.lake_otel.arn}:*"
-      },
+      }
+      ], var.enable_customer_managed_log_key ? [
       {
         Effect   = "Allow"
         Action   = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey*", "kms:DescribeKey"]
-        Resource = aws_kms_key.lake_otel.arn
+        Resource = aws_kms_key.lake_otel[0].arn
         Condition = {
           StringEquals = { "kms:ViaService" = "logs.${data.aws_region.current.name}.amazonaws.com" }
         }
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["xray:PutTraceSegments"]
-        Resource = "*"
       }
-    ]
+    ] : [])
   })
 }

@@ -4,11 +4,17 @@ import argparse
 import json
 import os
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
 
 import requests
+
+try:
+    from .public_executive import sanitize_public
+except ImportError:
+    from public_executive import sanitize_public
 
 
 def api(path):
@@ -140,6 +146,49 @@ def collect(repository, max_pages=5, detail_limit=30):
     }
 
 
+def collect_executive(repository):
+    """Download only a trusted main-branch observer artifact, then re-project it."""
+    data = api(
+        f"repos/{repository}/actions/workflows/executive.yml/runs?status=success&branch=main&per_page=10"
+    )
+    for run in data.get("workflow_runs", []):
+        if (
+            run.get("head_branch") != "main"
+            or run.get("path") != ".github/workflows/executive.yml"
+            or (run.get("head_repository") or {}).get("full_name") != repository
+        ):
+            continue
+        artifacts = api(f"repos/{repository}/actions/runs/{run['id']}/artifacts")
+        if not any(
+            a.get("name") == "mail-lake-executive-public" and not a.get("expired")
+            for a in artifacts.get("artifacts", [])
+        ):
+            continue
+        with tempfile.TemporaryDirectory(prefix="mail-lake-public-") as directory:
+            subprocess.run(
+                [
+                    "gh",
+                    "run",
+                    "download",
+                    str(run["id"]),
+                    "--repo",
+                    repository,
+                    "--name",
+                    "mail-lake-executive-public",
+                    "--dir",
+                    directory,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            path = Path(directory) / "executive-public.json"
+            if path.stat().st_size > 262144:
+                raise ValueError("Public executive artifact exceeds size limit")
+            return sanitize_public(json.loads(path.read_text()))
+    raise ValueError("No trusted executive artifact available")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -147,6 +196,7 @@ def main():
         default=os.environ.get("GITHUB_REPOSITORY", "considerable/mail-parquet-lake"),
     )
     parser.add_argument("--output", default="dashboard/data.json")
+    parser.add_argument("--executive-output", default="dashboard/executive.json")
     parser.add_argument("--max-pages", type=int, default=5)
     parser.add_argument("--job-details", type=int, default=30)
     args = parser.parse_args()
@@ -154,7 +204,23 @@ def main():
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(data, indent=2) + "\n")
-    print(f"Exported {len(data['runs'])} public-safe runs to {output}")
+    try:
+        executive = collect_executive(args.repository)
+    except (
+        OSError,
+        requests.RequestException,
+        subprocess.CalledProcessError,
+        ValueError,
+        KeyError,
+        TypeError,
+    ):
+        executive = {"schema_version": 1, "available": False, "observed_at": None}
+    Path(args.executive_output).write_text(
+        json.dumps(executive, allow_nan=False, indent=2) + "\n"
+    )
+    print(
+        f"Exported {len(data['runs'])} public-safe runs and executive evidence to {output.parent}"
+    )
 
 
 if __name__ == "__main__":

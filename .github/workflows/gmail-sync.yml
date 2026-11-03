@@ -93,6 +93,8 @@ jobs:
           GMAIL_NONINTERACTIVE: "1"
           PYTHONUNBUFFERED: "1"
           LAKE_TELEMETRY_ENABLED: "1"
+          LAKE_METRICS_ENABLED: "0"
+          LAKE_TRACES_ENABLED: "0"
           OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
         run: |
           echo "## 📬 Gmail Sync — $(date +%Y-%m-%d) ($SYNC_MODE)" >> $GITHUB_STEP_SUMMARY

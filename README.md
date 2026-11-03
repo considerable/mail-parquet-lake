@@ -193,15 +193,15 @@ linked to their parent email through `attachment_count` and `attachments_json`.
 For existing mail, run Gmail Sync in `attachment-backfill` mode. See
 [storage layout, recovery and retrieval](docs/attachments.md).
 
-## OpenTelemetry
+## OpenTelemetry and executive dashboard
 
-Gmail Sync now sends content-free logs, metrics and traces to AWS. Logs and EMF
-metrics use `/mail-parquet-lake/otel` in `us-west-2`; metrics appear in namespace
-`MailParquetLake`, and traces use X-Ray. See [OpenTelemetry setup and queries](docs/observability.md).
+[Open the Mail Lake executive dashboard](https://considerable.github.io/mail-parquet-lake/).
+GitHub Pages shows aggregate freshness, inventory, attachment completeness,
+reliability and dated trends. No mail content, filenames or AWS identifiers are
+published. Missing or stale data never appears healthy.
 
-## Executive CloudWatch dashboard
-
-`MailLake-Executive` in `us-west-2` shows measured freshness, completeness,
-inventory, execution reliability and attributable cost. A separate observer and
-missing-heartbeat alarms keep absent data from appearing healthy. See the
-[dashboard setup and decision rules](docs/observability.md#executive-dashboard).
+The low-cost profile keeps CloudWatch operational logs plus four independent
+health-alarm signals. Business custom metrics, trace export, Cost Explorer calls
+and the previous CloudWatch dashboard are retired. Inventory is measured daily.
+Account-wide free limits and S3/log usage still matter; $0 is not guaranteed.
+See [setup, privacy and cost controls](docs/observability.md).

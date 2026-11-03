@@ -8,7 +8,8 @@ import pyarrow.parquet as pq
 import pytest
 
 from scripts import collect_executive as collector
-from scripts.executive_dashboard import build, classify, latest_due, metrics
+from scripts.executive_dashboard import classify, latest_due, metrics
+from scripts.public_executive import project, sanitize_public
 
 NOW = datetime(2026, 11, 3, 19, 0, tzinfo=UTC)
 
@@ -59,7 +60,7 @@ def test_missing_sources_never_show_healthy_or_zero_freshness():
     assert health["status"] == "UNKNOWN"
     assert health["sync_age_hours"] is None
     assert "SyncAgeHours" not in {m["MetricName"] for m in metrics(data, health)}
-    assert "Unknown" in json.dumps(build(data, health, "123456789012"))
+    assert project(data)["health"]["status"] == "UNKNOWN"
 
 
 def test_healthy_requires_current_sync_complete_backfill_and_inventory():
@@ -88,8 +89,7 @@ def test_no_completed_sync_runs_is_unknown_not_100_percent():
         "failed": 0,
         "unclassified": 10,
     }
-    body = json.dumps(build(data, classify(data, NOW), "123456789012"))
-    assert "no classified, completed" in body
+    assert project(data)["reliability"]["completed"] == 0
     assert "ObservedSyncSuccessPercent" not in {
         m["MetricName"] for m in metrics(data, classify(data, NOW))
     }
@@ -98,19 +98,21 @@ def test_no_completed_sync_runs_is_unknown_not_100_percent():
 def test_dashboard_does_not_expose_unselected_private_fields_or_fake_cost():
     data = snapshot()
     data["email_subject"] = "VERY-PRIVATE-SUBJECT"
-    body = json.dumps(build(data, classify(data, NOW), "123456789012"))
+    body = json.dumps(project(data))
     assert "VERY-PRIVATE-SUBJECT" not in body
-    assert "Not yet attributable" in body
+    assert project(data)["billing_queries_enabled"] is False
     assert "$0.00" not in body
 
 
-def test_inactive_billing_tag_does_not_query_or_invent_zero_spend():
-    ce = MagicMock()
-    ce.list_cost_allocation_tags.return_value = {
-        "CostAllocationTags": [{"Status": "Inactive"}]
+def test_budget_profile_publishes_only_four_alarm_series():
+    data = snapshot()
+    names = {m["MetricName"] for m in metrics(data, classify(data, NOW))}
+    assert names == {
+        "ObserverHeartbeat",
+        "SourceErrors",
+        "SyncWorkflowActive",
+        "SyncOverdue",
     }
-    assert collector.project_cost(ce, NOW)["known"] is False
-    ce.get_cost_and_usage.assert_not_called()
 
 
 def test_reliability_excludes_probes_cancelled_unknown_and_old_runs(monkeypatch):
@@ -173,11 +175,44 @@ def test_inventory_counts_legacy_and_new_partitions_without_exporting_mail():
     assert "PRIVATE" not in json.dumps(result) and "SECRET" not in json.dumps(result)
 
 
-def test_dashboard_validation_failure_cannot_publish_success_heartbeat():
+def test_storage_failure_cannot_publish_success_heartbeat():
     cw, s3 = MagicMock(), MagicMock()
-    cw.put_dashboard.return_value = {
-        "DashboardValidationMessages": [{"Message": "bad widget"}]
-    }
-    with pytest.raises(ValueError):
-        collector.publish(s3, cw, "private", "gmail", snapshot(), "123456789012")
+    s3.put_object.side_effect = OSError("Storage unavailable")
+    with pytest.raises(OSError):
+        collector.publish(s3, cw, "private", "gmail", snapshot())
     cw.put_metric_data.assert_not_called()
+
+
+def test_publish_does_not_create_cloudwatch_dashboards_or_business_metrics():
+    cw, s3 = MagicMock(), MagicMock()
+    collector.publish(s3, cw, "private", "gmail", snapshot())
+    cw.put_dashboard.assert_not_called()
+    assert len(cw.put_metric_data.call_args.kwargs["MetricData"]) == 4
+
+
+def test_public_artifact_ignores_private_strings_in_every_unselected_location():
+    source = project(snapshot())
+    source["email_subject"] = "PRIVATE-SUBJECT"
+    source["health"]["reasons"] = ["PRIVATE-FILENAME.pdf"]
+    source["inventory"]["bucket"] = "PRIVATE-BUCKET"
+    source["history"][0]["address"] = "PRIVATE-ADDRESS@example.com"
+    output = sanitize_public(source)
+    assert "PRIVATE-" not in json.dumps(output)
+    assert output["inventory"]["emails"] == 98000
+
+
+def test_invalid_or_future_inventory_never_becomes_healthy():
+    source = snapshot()
+    source["inventory"]["emails"] = float("nan")
+    output = project(source)
+    assert output["inventory"] is None and output["health"]["status"] == "UNKNOWN"
+    source = snapshot()
+    source["sync"]["last_success_at"] = (NOW + timedelta(days=1)).isoformat()
+    assert project(source)["sync"] is None
+
+
+def test_daily_history_uses_measurement_day_not_refresh_day():
+    source = snapshot()
+    source["inventory"]["measured_at"] = (NOW - timedelta(days=1)).isoformat()
+    history = project(source)["history"]
+    assert len(history) == 1 and history[0]["date"] == "2026-11-02"

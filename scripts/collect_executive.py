@@ -1,4 +1,4 @@
-"""Read lake evidence and publish a private, aggregate CloudWatch executive view."""
+"""Collect aggregate evidence for GitHub Pages and four CloudWatch health alarms."""
 
 import argparse
 import io
@@ -15,9 +15,11 @@ import requests
 from botocore.exceptions import BotoCoreError, ClientError
 
 try:
-    from .executive_dashboard import NAME, NAMESPACE, REGION, build, classify, metrics
+    from .executive_dashboard import NAME, NAMESPACE, REGION, classify, metrics
+    from .public_executive import project
 except ImportError:
-    from executive_dashboard import NAME, NAMESPACE, REGION, build, classify, metrics
+    from executive_dashboard import NAME, NAMESPACE, REGION, classify, metrics
+    from public_executive import project
 
 
 MODES = {"full", "incremental", "attachment-backfill", "telemetry-check"}
@@ -163,42 +165,7 @@ def reliability(repository, modes, now):
     return totals
 
 
-def project_cost(ce, now):
-    tags = ce.list_cost_allocation_tags(TagKeys=["Project"]).get(
-        "CostAllocationTags", []
-    )
-    if not any(t["Status"] == "Active" for t in tags):
-        return {
-            "known": False,
-            "reason": "The Project cost-allocation tag is inactive. Tagged project cost is unavailable until billing allocation is configured.",
-        }
-    start, end = now.date().replace(day=1).isoformat(), now.date().isoformat()
-    if start == end:
-        return {
-            "known": False,
-            "reason": "No complete billing day is available for this month yet.",
-        }
-    result = ce.get_cost_and_usage(
-        TimePeriod={"Start": start, "End": end},
-        Granularity="MONTHLY",
-        Metrics=["UnblendedCost"],
-        Filter={"Tags": {"Key": "Project", "Values": ["mail-parquet-lake"]}},
-    )
-    groups = result.get("ResultsByTime", [])
-    if not groups:
-        return {
-            "known": False,
-            "reason": "AWS returned no attributable project billing results.",
-        }
-    return {
-        "known": True,
-        "amount": sum(float(x["Total"]["UnblendedCost"]["Amount"]) for x in groups),
-        "through": (now.date() - timedelta(days=1)).isoformat(),
-        "estimated": any(x.get("Estimated", False) for x in groups),
-    }
-
-
-def collect(s3, logs, ce, bucket, prefix, repository, now, force_inventory=False):
+def collect(s3, logs, bucket, prefix, repository, now, force_inventory=False):
     snapshot = {"schema_version": 1, "observed_at": stamp(now), "source_errors": []}
 
     def source(name, operation):
@@ -261,12 +228,8 @@ def collect(s3, logs, ce, bucket, prefix, repository, now, force_inventory=False
 
     def lake_inventory():
         prior, _ = read_json(s3, bucket, prefix + "/reports/executive-inventory.json")
-        # Refresh hourly during historical backfill; daily in steady operation.
-        max_age = timedelta(
-            hours=1
-            if snapshot["backfill"] and not snapshot["backfill"]["complete"]
-            else 24
-        )
+        # Daily inventory keeps observation reads bounded in the low-cost profile.
+        max_age = timedelta(hours=24)
         if prior:
             measured = datetime.fromisoformat(prior["measured_at"])
             if measured.tzinfo is None or measured > now + timedelta(minutes=5):
@@ -285,38 +248,21 @@ def collect(s3, logs, ce, bucket, prefix, repository, now, force_inventory=False
         return prior
 
     snapshot["inventory"] = source("lake_inventory", lake_inventory)
-    # Billing is cached daily; inactive allocation is explicitly unavailable.
     previous, _ = source(
         "executive_cache",
         lambda: read_json(s3, bucket, prefix + "/reports/executive-status.json"),
     ) or (None, None)
-    cost = previous.get("cost") if previous else None
-    if not cost or cost.get("checked_on") != now.date().isoformat():
-        try:
-            cost = project_cost(ce, now)
-        except (
-            BotoCoreError,
-            ClientError,
-            requests.RequestException,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ):
-            cost = {
-                "known": False,
-                "reason": "Project billing data could not be retrieved.",
-            }
-        cost["checked_on"] = now.date().isoformat()
-    snapshot["cost"] = cost
+    snapshot["daily_history"] = (previous or {}).get("daily_history", [])
+
     return snapshot
 
 
-def publish(s3, cw, bucket, prefix, snapshot, account):
+def publish(s3, cw, bucket, prefix, snapshot):
     now = datetime.fromisoformat(snapshot["observed_at"])
     health = classify(snapshot, now)
     data = [{**m, "Timestamp": now} for m in metrics(snapshot, health)]
-    body = build(snapshot, health, account)
+    public = project(snapshot, snapshot.get("daily_history"))
+    snapshot = {**snapshot, "daily_history": public["history"]}
     # Snapshot includes only explicitly selected aggregate evidence, never mail.
     if snapshot.get("inventory"):
         s3.put_object(
@@ -331,12 +277,8 @@ def publish(s3, cw, bucket, prefix, snapshot, account):
         Body=json.dumps(snapshot).encode(),
         ContentType="application/json",
     )
-    result = cw.put_dashboard(DashboardName=NAME, DashboardBody=json.dumps(body))
-    if result.get("DashboardValidationMessages"):
-        raise ValueError(
-            "Dashboard validation returned warnings; inspect the prepared body"
-        )
-    # Publish heartbeat last: failed dashboard updates cannot look successful.
+    # Only four independent alarm signals remain in CloudWatch. Business cards
+    # and trends are rendered from the public-safe artifact in GitHub Pages.
     cw.put_metric_data(Namespace=NAMESPACE, MetricData=data)
     return health
 
@@ -346,6 +288,7 @@ def main():
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--refresh-inventory", action="store_true")
     parser.add_argument("--output", default="/tmp/mail-lake-executive.json")
+    parser.add_argument("--public-output", default="/tmp/executive-public.json")
     args = parser.parse_args()
     bucket, prefix = (
         os.environ["S3_BUCKET"],
@@ -356,25 +299,25 @@ def main():
     s3, logs, cw = (
         boto3.client(s, region_name=REGION) for s in ["s3", "logs", "cloudwatch"]
     )
-    ce = boto3.client("ce", region_name="us-east-1")
     snapshot = collect(
-        s3, logs, ce, bucket, prefix, repository, now, args.refresh_inventory
+        s3, logs, bucket, prefix, repository, now, args.refresh_inventory
     )
     health = classify(snapshot, now)
-    account = boto3.client("sts").get_caller_identity()["Account"]
     Path(args.output).write_text(
         json.dumps(
             {
                 "snapshot": snapshot,
                 "health": health,
-                "dashboard": build(snapshot, health, account),
+                "public": project(snapshot, snapshot.get("daily_history")),
             },
             indent=2,
         )
         + "\n"
     )
+    public = project(snapshot, snapshot.get("daily_history"))
+    Path(args.public_output).write_text(json.dumps(public, allow_nan=False) + "\n")
     if args.publish:
-        publish(s3, cw, bucket, prefix, snapshot, account)
+        publish(s3, cw, bucket, prefix, snapshot)
     print(
         json.dumps(
             {

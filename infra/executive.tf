@@ -1,17 +1,3 @@
-resource "aws_cloudwatch_dashboard" "executive" {
-  dashboard_name = "MailLake-Executive"
-  dashboard_body = jsonencode({
-    widgets = [{
-      type       = "text", x = 0, y = 0, width = 24, height = 4
-      properties = { markdown = "# Mail Lake Executive\n\nAwaiting the scheduled observer. Health is unknown until operational evidence is collected." }
-    }]
-  })
-  # The scheduled observer owns the changing evidence/widgets after creation.
-  lifecycle {
-    ignore_changes = [dashboard_body]
-  }
-}
-
 resource "aws_iam_role_policy" "executive" {
   name   = "mail-lake-executive"
   role   = aws_iam_role.job_tracker_ci.id

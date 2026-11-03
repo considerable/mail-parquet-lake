@@ -1,13 +1,7 @@
-import importlib.util
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location(
-    "dashboard_builder", Path(__file__).parents[1] / "scripts/build_dashboard.py"
-)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+from scripts import build_dashboard as module
 
 
 class DashboardTests(unittest.TestCase):
@@ -139,3 +133,73 @@ class ApiSecurityTests(unittest.TestCase):
             self.assertRaises(OSError),
         ):
             module.api("repos/owner/repo/actions/runs")
+
+
+class ExecutiveArtifactTests(unittest.TestCase):
+    def test_untrusted_branch_artifact_is_not_downloaded(self):
+        with (
+            patch.object(
+                module,
+                "api",
+                return_value={
+                    "workflow_runs": [
+                        {
+                            "id": 1,
+                            "path": ".github/workflows/executive.yml",
+                            "head_branch": "untrusted",
+                            "head_repository": {"full_name": "owner/repo"},
+                        }
+                    ]
+                },
+            ),
+            patch.object(module.subprocess, "run") as run,
+        ):
+            with self.assertRaises(ValueError):
+                module.collect_executive("owner/repo")
+            run.assert_not_called()
+
+    def test_trusted_artifact_is_reprojected_before_publication(self):
+        import json
+        from datetime import UTC, datetime
+        from pathlib import Path
+
+        source = {
+            "schema_version": 1,
+            "observed_at": datetime.now(UTC).isoformat(),
+            "evidence_available": False,
+            "email_subject": "PRIVATE-SUBJECT",
+            "health": {"reasons": ["PRIVATE-REASON"]},
+            "history": [],
+        }
+
+        def download(args, **kwargs):
+            directory = Path(args[args.index("--dir") + 1])
+            (directory / "executive-public.json").write_text(json.dumps(source))
+
+        with (
+            patch.object(
+                module,
+                "api",
+                side_effect=[
+                    {
+                        "workflow_runs": [
+                            {
+                                "id": 1,
+                                "path": ".github/workflows/executive.yml",
+                                "head_branch": "main",
+                                "head_repository": {"full_name": "owner/repo"},
+                            }
+                        ]
+                    },
+                    {
+                        "artifacts": [
+                            {"name": "mail-lake-executive-public", "expired": False}
+                        ]
+                    },
+                ],
+            ),
+            patch.object(module.subprocess, "run", side_effect=download),
+        ):
+            result = module.collect_executive("owner/repo")
+        self.assertNotIn("PRIVATE-", json.dumps(result))
+        self.assertEqual(result["health"]["status"], "UNKNOWN")

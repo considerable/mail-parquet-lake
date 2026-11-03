@@ -5,12 +5,13 @@ on:
     paths:
       - 'dashboard/**'
       - 'scripts/build_dashboard.py'
+      - 'scripts/public_executive.py'
       - 'tests/test_dashboard.py'
       - '.github/workflows/dashboard.yml'
   schedule:
     - cron: '23,53 * * * *'
   workflow_run:
-    workflows: ['Gmail Sync', 'Job Tracker', 'Security & Code Quality']
+    workflows: ['Gmail Sync', 'Job Tracker', 'Security & Code Quality', 'Executive Observability']
     types: [completed]
   workflow_dispatch:
 
