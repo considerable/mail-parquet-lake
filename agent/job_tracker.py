@@ -10,15 +10,15 @@ Usage:
     python3 agent/job_tracker.py --md             # output markdown
 """
 
+import argparse
 import os
 import re
-import argparse
 from collections import defaultdict
 from pathlib import Path
 
-import yaml
 import duckdb
 import pandas as pd
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -97,20 +97,21 @@ def _extract_company(from_addr: str) -> str:
         "trans.",
         "workflow.mail.",
     ):
-        if domain.startswith(prefix):
-            domain = domain[len(prefix) :]
+        domain = domain.removeprefix(prefix)
     return domain.split(".")[0].replace("-", " ").title()
 
 
 def fetch_job_emails(days: int) -> pd.DataFrame:
     con = duckdb.connect()
     con.sql("INSTALL httpfs; LOAD httpfs;")
-    con.sql("CALL load_aws_credentials();")
+    con.sql(
+        "CREATE SECRET IF NOT EXISTS aws_credentials (TYPE S3, PROVIDER credential_chain);"
+    )
 
     keyword_filter = _build_keyword_filter()
     df = con.sql(f"""
         SELECT gmail_id, thread_id, date, from_addr, to_addr, subject, body_text
-        FROM read_parquet('{S3_BASE}/**/*.parquet')
+        FROM read_parquet('{S3_BASE}/**/*.parquet', union_by_name=true)
         WHERE date > now() - INTERVAL '{days} days'
           AND ({keyword_filter})
         ORDER BY date DESC

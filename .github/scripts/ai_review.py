@@ -6,6 +6,7 @@ Reads a git diff, sends to Bedrock, prints findings as markdown.
 import json
 import os
 import sys
+
 import boto3
 
 MODEL_ID = "us.amazon.nova-micro-v1:0"

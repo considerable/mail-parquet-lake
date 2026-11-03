@@ -5,9 +5,10 @@ Usage:
     python3 export/to_markdown.py --days 30 --filter "fitch" --output export/output/
 """
 
+import argparse
 import os
 import re
-import argparse
+
 import duckdb
 import pandas as pd
 from dotenv import load_dotenv
@@ -38,7 +39,7 @@ def export_to_markdown(days: int, filter_text: str, output_dir: str):
 
     df = duckdb.sql(f"""
         SELECT date, from_addr, to_addr, subject, body_text, labels
-        FROM read_parquet('{S3_BASE}/**/*.parquet')
+        FROM read_parquet('{S3_BASE}/**/*.parquet', union_by_name=true)
         WHERE {where}
         ORDER BY date DESC
     """).df()

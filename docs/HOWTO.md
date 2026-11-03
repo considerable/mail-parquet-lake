@@ -131,9 +131,10 @@ Or interactively:
 
 ```python
 import duckdb
+
 duckdb.sql("""
     SELECT date, from_addr, subject
-    FROM read_parquet('s3://<your-bucket-name>/<your-prefix>/**/*.parquet')
+    FROM read_parquet('s3://<your-bucket-name>/<your-prefix>/**/*.parquet', union_by_name=true)
     ORDER BY date DESC
     LIMIT 20
 """).show()

@@ -17,14 +17,20 @@ on:
         options:
           - incremental
           - full
+          - attachment-backfill
 
 permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: gmail-lake-writer
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
 
@@ -42,9 +48,17 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Write Gmail credentials
+        env:
+          GMAIL_CREDENTIALS_JSON: ${{ secrets.GMAIL_CREDENTIALS_JSON }}
+          GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
         run: |
-          echo '${{ secrets.GMAIL_CREDENTIALS_JSON }}' > credentials.json
-          echo '${{ secrets.GMAIL_TOKEN_JSON }}' > token.json
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          for name, variable in [("credentials.json", "GMAIL_CREDENTIALS_JSON"), ("token.json", "GMAIL_TOKEN_JSON")]:
+              Path(name).write_text(os.environ[variable])
+              Path(name).chmod(0o600)
+          PY
 
       - name: Run sync
         env:
@@ -54,8 +68,10 @@ jobs:
           GMAIL_ACCOUNT: ${{ secrets.GMAIL_ACCOUNT }}
           GMAIL_CREDENTIALS_FILE: credentials.json
           GMAIL_TOKEN_FILE: token.json
+          GMAIL_NONINTERACTIVE: "1"
+          PYTHONUNBUFFERED: "1"
         run: |
           echo "## 📬 Gmail Sync — $(date +%Y-%m-%d) ($SYNC_MODE)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           python3 sync/gmail_sync.py --"$SYNC_MODE" 2>&1
-          echo "✅ Sync complete" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Requested sync pass complete (backfill progress is in the run log)" >> $GITHUB_STEP_SUMMARY

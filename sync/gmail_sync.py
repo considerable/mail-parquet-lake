@@ -4,21 +4,29 @@ Gmail → Parquet on S3 sync.
 Usage:
     python3 sync/gmail_sync.py --full          # initial import
     python3 sync/gmail_sync.py --incremental   # delta sync via history API
+    python3 sync/gmail_sync.py --attachment-backfill  # resumable historical files
 """
 
-import os
-import json
 import argparse
-import base64
+import json
+import os
 import time
+from io import BytesIO
+
+from botocore.exceptions import ClientError
+
+try:
+    from .attachments import attachment_parts, decode_data, read_json, store_attachments
+except ImportError:
+    from attachments import attachment_parts, decode_data, read_json, store_attachments
 import boto3
-import duckdb
 import pandas as pd
 from dotenv import load_dotenv
-from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 load_dotenv()
 
@@ -29,9 +37,7 @@ AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 S3_BASE = f"s3://{S3_BUCKET}/{S3_PREFIX}"
 STATE_KEY = f"{S3_PREFIX}/sync_state.json"
 
-# DuckDB needs AWS creds for S3 reads
-_db = duckdb.connect()
-_db.execute("CALL load_aws_credentials()")
+BACKFILL_KEY = f"{S3_PREFIX}/attachment_backfill_state.json"
 
 
 def get_gmail_service():
@@ -45,6 +51,8 @@ def get_gmail_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            if os.getenv("GMAIL_NONINTERACTIVE") == "1":
+                raise RuntimeError("Gmail token requires renewed authorization")
             flow = InstalledAppFlow.from_client_secrets_file(creds_file, SCOPES)
             creds = flow.run_local_server(port=0)
         with open(token_file, "w") as f:
@@ -65,12 +73,45 @@ def _fetch_message(service, msg_id, retries=3):
                 .get(userId="me", id=msg_id, format="full")
                 .execute()
             )
-        except Exception as e:
+        except HttpError as e:
+            if e.resp.status == 404:
+                return None  # Permanently deleted since Gmail returned the reference.
             if attempt < retries - 1:
                 time.sleep(2**attempt)
             else:
-                print(f"  skipping {msg_id}: {e}")
-                return None
+                raise RuntimeError(
+                    "Gmail message fetch failed; checkpoint not advanced"
+                ) from e
+
+
+def _fetch_messages(service, references):
+    """Batch up to 50 Gmail gets; retry individual failures without dropping mail."""
+    fetched = {}
+    errors = set()
+
+    def receive(request_id, response, exception):
+        if exception:
+            errors.add(request_id)
+        else:
+            fetched[request_id] = response
+
+    for offset in range(0, len(references), 50):
+        subset = references[offset : offset + 50]
+        batch = service.new_batch_http_request(callback=receive)
+        for ref in subset:
+            batch.add(
+                service.users()
+                .messages()
+                .get(userId="me", id=ref["id"], format="full"),
+                request_id=ref["id"],
+            )
+        batch.execute()
+        for ref in subset:
+            if ref["id"] in errors or ref["id"] not in fetched:
+                fetched[ref["id"]] = _fetch_message(service, ref["id"])
+        # Keep batched reads below the Gmail per-user quota; retries back off too.
+        time.sleep(1)
+    return [fetched[ref["id"]] for ref in references if fetched[ref["id"]] is not None]
 
 
 def load_sync_state(s3):
@@ -100,15 +141,13 @@ def parse_message(msg):
     body = ""
     payload = msg.get("payload", {})
     if "body" in payload and payload["body"].get("data"):
-        body = base64.urlsafe_b64decode(payload["body"]["data"]).decode(
-            "utf-8", errors="replace"
-        )
+        body = decode_data(payload["body"]["data"]).decode("utf-8", errors="replace")
     elif "parts" in payload:
         for part in payload["parts"]:
             if part.get("mimeType") == "text/plain" and part.get("body", {}).get(
                 "data"
             ):
-                body = base64.urlsafe_b64decode(part["body"]["data"]).decode(
+                body = decode_data(part["body"]["data"]).decode(
                     "utf-8", errors="replace"
                 )
                 break
@@ -126,6 +165,66 @@ def parse_message(msg):
     }
 
 
+def prepare_message(service, s3, message):
+    record = parse_message(message)
+    if record is None:
+        raise ValueError("Message date missing; checkpoint not advanced")
+    attachments = store_attachments(service, s3, S3_BUCKET, S3_PREFIX, message)
+    record["attachment_count"] = len(attachments)
+    record["attachments_json"] = json.dumps(attachments)
+    return record
+
+
+def backfill_attachments(service, s3, max_seconds=14400):
+    """Scan all MIME trees (including Trash/Spam); resume at committed page boundaries.
+
+    Gmail's has:attachment filter misses some inline/unnamed calendar parts, so
+    scan the mailbox but update only messages that actually contain attachments.
+    Never modify the incremental Gmail history checkpoint.
+    """
+    state = read_json(s3, S3_BUCKET, BACKFILL_KEY) or {
+        "scanned": 0,
+        "emails_with_attachments": 0,
+        "attachments": 0,
+    }
+    if state.get("complete"):
+        print("Attachment backfill already complete; new mail uses regular sync.")
+        return state
+    started = time.monotonic()
+    while True:
+        kwargs = {"userId": "me", "maxResults": 100, "includeSpamTrash": True}
+        if state.get("next_page_token"):
+            kwargs["pageToken"] = state["next_page_token"]
+        result = service.users().messages().list(**kwargs).execute(num_retries=5)
+        records = []
+        count = 0
+        for message in _fetch_messages(service, result.get("messages", [])):
+            if list(attachment_parts(message.get("payload", {}))):
+                record = prepare_message(service, s3, message)
+                records.append(record)
+                count += record["attachment_count"]
+        write_parquet(records, s3)
+        state["scanned"] += len(result.get("messages", []))
+        state["emails_with_attachments"] += len(records)
+        state["attachments"] += count
+        state["next_page_token"] = result.get("nextPageToken")
+        state["complete"] = not bool(state["next_page_token"])
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=BACKFILL_KEY,
+            Body=json.dumps(state).encode(),
+            ContentType="application/json",
+        )
+        print(
+            f"Attachment backfill: scanned={state['scanned']}, "
+            f"emails={state['emails_with_attachments']}, files={state['attachments']}, "
+            f"complete={state['complete']}",
+            flush=True,
+        )
+        if state["complete"] or time.monotonic() - started >= max_seconds:
+            return state
+
+
 def write_parquet(records, s3):
     """Write records to S3 Parquet, partitioned by year/month."""
     if not records:
@@ -137,14 +236,15 @@ def write_parquet(records, s3):
         key = f"{S3_PREFIX}/year={year}/month={month:02d}/emails.parquet"
         # merge with existing partition if it exists
         try:
-            existing = _db.sql(
-                f"SELECT * FROM read_parquet('s3://{S3_BUCKET}/{key}')"
-            ).df()
+            existing = pd.read_parquet(
+                BytesIO(s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read())
+            )
             group = pd.concat([existing, group]).drop_duplicates(
                 subset="gmail_id", keep="last"
             )
-        except Exception:
-            pass  # partition doesn't exist yet
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] not in {"NoSuchKey", "404"}:
+                raise
 
         buf = group.to_parquet(index=False)
         s3.put_object(Bucket=S3_BUCKET, Key=key, Body=buf)
@@ -169,7 +269,7 @@ def sync_full(service, s3):
         for msg_ref in messages:
             msg = _fetch_message(service, msg_ref["id"])
             if msg:
-                rec = parse_message(msg)
+                rec = prepare_message(service, s3, msg)
                 if rec:
                     batch.append(rec)
 
@@ -201,8 +301,7 @@ def sync_incremental(service, s3):
     last_history_id = state.get("last_history_id")
 
     if not last_history_id:
-        print("No history ID found — run --full first")
-        return
+        raise RuntimeError("No history ID found — run --full first")
 
     print(f"Incremental sync from history_id={last_history_id}...")
     new_records = []
@@ -221,14 +320,15 @@ def sync_incremental(service, s3):
         try:
             result = service.users().history().list(**kwargs).execute()
         except Exception as e:
-            print(f"History API error: {e} — consider running --full")
-            return
+            raise RuntimeError(
+                "History API failed; checkpoint not advanced. A full sync may be needed."
+            ) from e
 
         for history in result.get("history", []):
             for added in history.get("messagesAdded", []):
                 msg = _fetch_message(service, added["message"]["id"])
                 if msg:
-                    rec = parse_message(msg)
+                    rec = prepare_message(service, s3, msg)
                     if rec:
                         new_records.append(rec)
 
@@ -261,7 +361,9 @@ def delete_from_parquet(gmail_ids, s3):
             key = obj["Key"]
             if not key.endswith(".parquet"):
                 continue
-            df = _db.sql(f"SELECT * FROM read_parquet('s3://{S3_BUCKET}/{key}')").df()
+            df = pd.read_parquet(
+                BytesIO(s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read())
+            )
             before = len(df)
             df = df[~df["gmail_id"].isin(ids_set)]
             if len(df) < before:
@@ -273,14 +375,32 @@ def delete_from_parquet(gmail_ids, s3):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--full", action="store_true")
-    parser.add_argument("--incremental", action="store_true")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--full", action="store_true")
+    mode.add_argument("--incremental", action="store_true")
+    mode.add_argument("--attachment-backfill", action="store_true")
+    parser.add_argument("--max-seconds", type=int, default=14400)
     args = parser.parse_args()
 
     service = get_gmail_service()
     s3 = get_s3_client()
 
-    if args.full:
+    if args.attachment_backfill:
+        progress = backfill_attachments(service, s3, args.max_seconds)
+        if os.getenv("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                summary.write(
+                    f"Attachment backfill: {progress['scanned']} messages scanned; "
+                    f"{progress['emails_with_attachments']} emails with attachments; "
+                    f"{progress['attachments']} files. "
+                    + (
+                        "**Complete.**"
+                        if progress["complete"]
+                        else "**Paused at a checkpoint; re-run attachment-backfill to continue.**"
+                    )
+                    + "\n"
+                )
+    elif args.full:
         sync_full(service, s3)
     elif args.incremental:
         sync_incremental(service, s3)

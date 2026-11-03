@@ -41,9 +41,12 @@ s3://{S3_BUCKET}/{S3_PREFIX}/
 ## DuckDB Query Pattern
 ```python
 import duckdb
+
 con = duckdb.connect()
-con.execute('CALL load_aws_credentials()')  # required for S3 access
-con.sql(f"SELECT * FROM read_parquet('{S3_BASE}/**/*.parquet')")
+con.execute(
+    "CREATE SECRET IF NOT EXISTS aws_credentials (TYPE S3, PROVIDER credential_chain)"
+)
+con.sql(f"SELECT * FROM read_parquet('{S3_BASE}/**/*.parquet', union_by_name=true)")
 ```
 
 ## Delete Sync Pattern
@@ -58,4 +61,4 @@ Always use history API delta, never full re-scan after initial import.
 - Partition by year/month — rewrite only affected partition on delete sync
 - Export .md files go to export/output/ — gitignored
 - Skip emails with internalDate=0 (epoch zero)
-- DuckDB must call load_aws_credentials() before S3 reads
+- DuckDB must configure an S3 credential_chain secret before S3 reads; use union_by_name=true across partitions

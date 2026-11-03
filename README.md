@@ -185,3 +185,10 @@ Strategies to minimize transfer:
 | [docs/HOWTO.md](docs/HOWTO.md) | End-to-end setup guide |
 | [docs/SECURITY.md](docs/SECURITY.md) | CI security pipeline |
 | [docs/job-tracker.md](docs/job-tracker.md) | Job search pipeline tracker |
+
+## Email attachments
+
+Full and incremental sync now preserve original attachment bytes in private S3,
+linked to their parent email through `attachment_count` and `attachments_json`.
+For existing mail, run Gmail Sync in `attachment-backfill` mode. See
+[storage layout, recovery and retrieval](docs/attachments.md).

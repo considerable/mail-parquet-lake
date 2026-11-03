@@ -4,6 +4,7 @@ Each tool queries the Gmail Parquet lake on S3 via DuckDB.
 """
 
 import os
+
 import duckdb
 from dotenv import load_dotenv
 
@@ -14,7 +15,10 @@ S3_BASE = f"s3://{S3_BUCKET}/{S3_PREFIX}"
 
 
 def query_gmail(
-    query_text: str, date_from: str = None, date_to: str = None, limit: int = 20
+    query_text: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 20,
 ) -> str:
     """
     Search Gmail lake by keyword. Returns markdown table.
@@ -35,7 +39,7 @@ def query_gmail(
 
     df = duckdb.sql(f"""
         SELECT date, from_addr, subject
-        FROM read_parquet('{S3_BASE}/**/*.parquet')
+        FROM read_parquet('{S3_BASE}/**/*.parquet', union_by_name=true)
         WHERE {" AND ".join(where)}
         ORDER BY date DESC
         LIMIT {limit}
@@ -55,7 +59,7 @@ def get_email_body(gmail_id: str) -> str:
     """
     df = duckdb.sql(f"""
         SELECT date, from_addr, subject, body_text
-        FROM read_parquet('{S3_BASE}/**/*.parquet')
+        FROM read_parquet('{S3_BASE}/**/*.parquet', union_by_name=true)
         WHERE gmail_id = '{gmail_id}'
         LIMIT 1
     """).df()
@@ -77,7 +81,7 @@ def list_recent_senders(days: int = 7, limit: int = 20) -> str:
     """
     df = duckdb.sql(f"""
         SELECT from_addr, COUNT(*) as email_count
-        FROM read_parquet('{S3_BASE}/**/*.parquet')
+        FROM read_parquet('{S3_BASE}/**/*.parquet', union_by_name=true)
         WHERE date > now() - INTERVAL '{days} days'
         GROUP BY from_addr
         ORDER BY email_count DESC
