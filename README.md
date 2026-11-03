@@ -197,4 +197,4 @@ For existing mail, run Gmail Sync in `attachment-backfill` mode. See
 
 Gmail Sync now sends content-free logs, metrics and traces to AWS. Logs and EMF
 metrics use `/mail-parquet-lake/otel` in `us-west-2`; metrics appear in namespace
-`MailParquetLake`, and traces use X-Ray. See [OpenTelemetry setup and queries](docs/otel.md).
+`MailParquetLake`, and traces use X-Ray. See [OpenTelemetry setup and queries](docs/observability.md).
