@@ -7,6 +7,11 @@ from datetime import UTC, datetime
 
 from botocore.exceptions import ClientError
 
+try:
+    from .telemetry import telemetry
+except ImportError:
+    from telemetry import telemetry
+
 SCHEMA_VERSION = 1
 
 
@@ -114,5 +119,9 @@ def store_attachments(service, s3, bucket, prefix, message):
         Key=manifest_key,
         Body=json.dumps(manifest).encode(),
         ContentType="application/json",
+    )
+    telemetry.count("lake_attachments_stored", len(attachments))
+    telemetry.count(
+        "lake_attachment_bytes_stored", sum(a["size_bytes"] for a in attachments)
     )
     return attachments

@@ -17,8 +17,10 @@ from botocore.exceptions import ClientError
 
 try:
     from .attachments import attachment_parts, decode_data, read_json, store_attachments
+    from .telemetry import telemetry
 except ImportError:
     from attachments import attachment_parts, decode_data, read_json, store_attachments
+    from telemetry import telemetry
 import boto3
 import pandas as pd
 from dotenv import load_dotenv
@@ -77,6 +79,7 @@ def _fetch_message(service, msg_id, retries=3):
             if e.resp.status == 404:
                 return None  # Permanently deleted since Gmail returned the reference.
             if attempt < retries - 1:
+                telemetry.count("lake_gmail_fetch_retries", 1)
                 time.sleep(2**attempt)
             else:
                 raise RuntimeError(
@@ -203,7 +206,9 @@ def backfill_attachments(service, s3, max_seconds=14400):
                 record = prepare_message(service, s3, message)
                 records.append(record)
                 count += record["attachment_count"]
-        write_parquet(records, s3)
+        with telemetry.operation("backfill.commit_page"):
+            write_parquet(records, s3)
+        telemetry.count("lake_messages_scanned", len(result.get("messages", [])))
         state["scanned"] += len(result.get("messages", []))
         state["emails_with_attachments"] += len(records)
         state["attachments"] += count
@@ -220,6 +225,13 @@ def backfill_attachments(service, s3, max_seconds=14400):
             f"emails={state['emails_with_attachments']}, files={state['attachments']}, "
             f"complete={state['complete']}",
             flush=True,
+        )
+        telemetry.event(
+            "backfill_progress",
+            scanned=state["scanned"],
+            emails_with_attachments=state["emails_with_attachments"],
+            attachments=state["attachments"],
+            complete=state["complete"],
         )
         if state["complete"] or time.monotonic() - started >= max_seconds:
             return state
@@ -256,6 +268,8 @@ def write_parquet(records, s3):
         buf = group.to_parquet(index=False)
         s3.put_object(Bucket=S3_BUCKET, Key=key, Body=buf)
         print(f"  wrote {len(group)} rows → s3://{S3_BUCKET}/{key}")
+
+    telemetry.count("lake_email_rows_upserted", len(records))
 
 
 def sync_full(service, s3):
@@ -386,33 +400,57 @@ if __name__ == "__main__":
     mode.add_argument("--full", action="store_true")
     mode.add_argument("--incremental", action="store_true")
     mode.add_argument("--attachment-backfill", action="store_true")
+    mode.add_argument("--telemetry-check", action="store_true")
     parser.add_argument("--max-seconds", type=int, default=14400)
     parser.add_argument("--resume-pending-backfill", action="store_true")
     args = parser.parse_args()
 
-    service = get_gmail_service()
-    s3 = get_s3_client()
-
-    if args.attachment_backfill:
-        progress = backfill_attachments(service, s3, args.max_seconds)
-        if os.getenv("GITHUB_STEP_SUMMARY"):
-            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-                summary.write(
-                    f"Attachment backfill: {progress['scanned']} messages scanned; "
-                    f"{progress['emails_with_attachments']} emails with attachments; "
-                    f"{progress['attachments']} files. "
-                    + (
-                        "**Complete.**"
-                        if progress["complete"]
-                        else "**Paused at a checkpoint; re-run attachment-backfill to continue.**"
-                    )
-                    + "\n"
-                )
-    elif args.full:
-        sync_full(service, s3)
-    elif args.incremental:
-        if args.resume_pending_backfill:
-            resume_pending_backfill(service, s3, args.max_seconds)
-        sync_incremental(service, s3)
-    else:
-        print("Use --full or --incremental")
+    selected_mode = (
+        "attachment-backfill"
+        if args.attachment_backfill
+        else "full"
+        if args.full
+        else "telemetry-check"
+        if args.telemetry_check
+        else "incremental"
+    )
+    telemetry.configure(selected_mode)
+    try:
+        with telemetry.operation("sync.run"):
+            if args.telemetry_check:
+                telemetry.event("telemetry_check_passed")
+                telemetry.count("lake_telemetry_checks", 1)
+            else:
+                service = get_gmail_service()
+                s3 = get_s3_client()
+                if args.attachment_backfill:
+                    progress = backfill_attachments(service, s3, args.max_seconds)
+                    if os.getenv("GITHUB_STEP_SUMMARY"):
+                        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                            summary.write(
+                                f"Attachment backfill: {progress['scanned']} messages scanned; "
+                                f"{progress['emails_with_attachments']} emails with attachments; "
+                                f"{progress['attachments']} files. "
+                                + (
+                                    "**Complete.**"
+                                    if progress["complete"]
+                                    else "**Paused at a checkpoint; re-run attachment-backfill to continue.**"
+                                )
+                                + "\n"
+                            )
+                elif args.full:
+                    sync_full(service, s3)
+                elif args.incremental:
+                    if args.resume_pending_backfill:
+                        resume_pending_backfill(service, s3, args.max_seconds)
+                    sync_incremental(service, s3)
+                else:
+                    print("Use --full or --incremental")
+        telemetry.event("run_finished")
+        telemetry.count("lake_runs_finished", 1)
+    except Exception:
+        telemetry.event("run_failed")
+        telemetry.count("lake_runs_failed", 1)
+        raise
+    finally:
+        telemetry.close()

@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteLakeTelemetryLogs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:us-west-2:ACCOUNT_ID:log-group:/mail-parquet-lake/otel:*"
+    },
+    {
+      "Sid": "WriteLakeTraces",
+      "Effect": "Allow",
+      "Action": ["xray:PutTraceSegments"],
+      "Resource": "*"
+    }
+  ]
+}

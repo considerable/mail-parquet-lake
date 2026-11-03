@@ -9,3 +9,6 @@ python-dotenv>=1.0.0
 pyyaml>=6.0
 tabulate>=0.9.0
 pytest>=8.0.0
+opentelemetry-sdk>=1.45,<2
+opentelemetry-exporter-otlp-proto-http>=1.45,<2
+opentelemetry-sdk-extension-aws>=2.1,<3

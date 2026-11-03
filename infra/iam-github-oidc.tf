@@ -23,7 +23,8 @@ resource "aws_iam_openid_connect_provider" "github" {
 
 # Role that GitHub Actions assumes
 resource "aws_iam_role" "job_tracker_ci" {
-  name = "job-tracker-ci"
+  name                 = "job-tracker-ci"
+  max_session_duration = 21600
   tags = { Project = "mail-parquet-lake" }
 
   assume_role_policy = jsonencode({

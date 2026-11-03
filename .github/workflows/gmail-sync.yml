@@ -18,13 +18,14 @@ on:
           - incremental
           - full
           - attachment-backfill
+          - telemetry-check
 
 permissions:
   id-token: write
   contents: read
 
 concurrency:
-  group: gmail-lake-writer
+  group: ${{ github.event.inputs.mode == 'telemetry-check' && 'gmail-telemetry-check' || 'gmail-lake-writer' }}
   cancel-in-progress: false
 
 jobs:
@@ -39,6 +40,7 @@ jobs:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/job-tracker-ci
           role-session-name: gmail-sync
           aws-region: us-west-2
+          role-duration-seconds: 21600
 
       - uses: actions/setup-python@v5
         with:
@@ -46,6 +48,26 @@ jobs:
           cache: pip
 
       - run: pip install -r requirements.txt
+
+      - name: Start OpenTelemetry Collector
+        env:
+          AWS_REGION: us-west-2
+          CLOUDWATCH_LOG_GROUP: /mail-parquet-lake/otel
+        run: |
+          export CLOUDWATCH_LOG_STREAM="github/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          aws logs create-log-stream --log-group-name "$CLOUDWATCH_LOG_GROUP" --log-stream-name "$CLOUDWATCH_LOG_STREAM"
+          docker run -d --name lake-otel --memory 384m \
+            -p 127.0.0.1:4318:4318 -p 127.0.0.1:13133:13133 \
+            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+            -e AWS_REGION -e CLOUDWATCH_LOG_GROUP -e CLOUDWATCH_LOG_STREAM \
+            -v "$PWD/observability/collector.yaml:/etc/otelcol-contrib/config.yaml:ro" \
+            otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:13133/; then exit 0; fi
+            sleep 1
+          done
+          docker logs lake-otel
+          exit 1
 
       - name: Write Gmail credentials
         env:
@@ -70,6 +92,8 @@ jobs:
           GMAIL_TOKEN_FILE: token.json
           GMAIL_NONINTERACTIVE: "1"
           PYTHONUNBUFFERED: "1"
+          LAKE_TELEMETRY_ENABLED: "1"
+          OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
         run: |
           echo "## 📬 Gmail Sync — $(date +%Y-%m-%d) ($SYNC_MODE)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -79,3 +103,12 @@ jobs:
             python3 sync/gmail_sync.py --"$SYNC_MODE"
           fi
           echo "✅ Requested sync pass complete (backfill progress is in the run log)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Flush OpenTelemetry Collector
+        if: always()
+        run: |
+          if docker inspect lake-otel > /dev/null 2>&1; then
+            docker stop --time 30 lake-otel
+            docker logs lake-otel
+            docker rm lake-otel
+          fi

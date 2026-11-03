@@ -1,0 +1,68 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  sigv4auth/logs:
+    service: logs
+    region: ${env:AWS_REGION}
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 192
+    spike_limit_mib: 48
+  batch:
+    timeout: 5s
+    send_batch_size: 64
+    send_batch_max_size: 128
+exporters:
+  otlphttp/logs:
+    logs_endpoint: https://logs.${env:AWS_REGION}.amazonaws.com/v1/logs
+    auth:
+      authenticator: sigv4auth/logs
+    headers:
+      x-aws-log-group: ${env:CLOUDWATCH_LOG_GROUP}
+      x-aws-log-stream: ${env:CLOUDWATCH_LOG_STREAM}
+    compression: gzip
+    timeout: 10s
+    retry_on_failure:
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 60s
+    sending_queue:
+      queue_size: 128
+  awsemf:
+    region: ${env:AWS_REGION}
+    log_group_name: ${env:CLOUDWATCH_LOG_GROUP}
+    log_stream_name: metrics
+    namespace: MailParquetLake
+    dimension_rollup_option: NoDimensionRollup
+    retain_initial_value_of_delta_metric: true
+    resource_to_telemetry_conversion:
+      enabled: false
+    metric_declarations:
+      - dimensions: [[mode], [mode, operation]]
+        metric_name_selectors: ['^lake_.*']
+  awsxray:
+    region: ${env:AWS_REGION}
+    local_mode: true
+    aws_log_groups: ["${env:CLOUDWATCH_LOG_GROUP}"]
+    max_retries: 3
+service:
+  extensions: [health_check, sigv4auth/logs]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/logs]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [awsemf]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [awsxray]
